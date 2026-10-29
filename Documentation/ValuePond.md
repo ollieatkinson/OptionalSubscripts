@@ -1,6 +1,6 @@
-# Pond behaviour compatibility
+# ValuePond behaviour compatibility
 
-Reference: [Pond implementation and tests](https://gist.github.com/ollieatkinson/9f2748231612483e0cfd5c2cf76d44e9),
+Reference: [ValuePond implementation and tests](https://gist.github.com/ollieatkinson/9f2748231612483e0cfd5c2cf76d44e9),
 revision `364b12981c80cda9008581cf2521de4ecdf8d7f1`.
 
 The typed target and tests require Swift 6.4 / Xcode 27 and compile in Swift 6
@@ -28,7 +28,7 @@ global serial-executor override.
 
 ## Finite-source retention
 
-The original Pond retains subscribers and the final value until they leave.
+The original ValuePond retains subscribers and the final value until they leave.
 This implementation preserves that contract: an active subscriber prevents cache
 expiry even after a finite source has produced its last value. A test advances
 four grace periods while that subscriber remains and verifies the value is still

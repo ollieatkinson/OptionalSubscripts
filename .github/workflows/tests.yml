@@ -18,9 +18,9 @@ jobs:
         xcodebuild -version
         swift --version
         swift --version | grep -F 'Swift version 6.4'
-    - name: Check typed concurrency foundations
-      run: swiftc -swift-version 6 -strict-concurrency=complete -warnings-as-errors -typecheck Sources/OptionalSubscripts/Pond.swift Sources/OptionalSubscripts/Lake.swift Sources/OptionalSubscripts/Trie.swift
     - name: Build
       run: swift build -v
+    - name: Check typed concurrency foundations
+      run: swiftc -I "$(swift build --show-bin-path)/Modules" -swift-version 6 -strict-concurrency=complete -warnings-as-errors -typecheck Sources/OptionalSubscripts/ValuePond.swift Sources/OptionalSubscripts/Lake.swift Sources/OptionalSubscripts/Trie.swift
     - name: Run tests
       run: swift test -v --parallel

@@ -111,15 +111,15 @@ protocol Geyser {
 }
 ```
 
-### Sharing a typed source with Pond
+### Sharing a typed source with ValuePond
 
-`Pond` shares one nonthrowing `AsyncSequence`, replaying its latest
+`ValuePond` shares one nonthrowing `AsyncSequence`, replaying its latest
 value to each subscriber. It is available on macOS 15, iOS 18, tvOS 18 and watchOS 11
 or newer; the rest of the package keeps its existing deployment requirements.
 
 ```swift
 let store = ValueStore(42)
-let pond = Pond(cancellingGracePeriod: .seconds(5), source: {
+let pond = ValuePond(cancellingGracePeriod: .seconds(5), source: {
     await store.stream()
 })
 
@@ -138,12 +138,14 @@ snapshot elements. `cancel()` closes subscribers, clears replay and lets the nex
 subscription start afresh. A custom `Clock<Duration>` can control grace periods.
 
 The implementation and tests preserve the updated
-[original Pond examples](https://gist.github.com/ollieatkinson/9f2748231612483e0cfd5c2cf76d44e9).
-See [behaviour compatibility](Documentation/Pond.md) for the scenario mapping
+[original ValuePond examples](https://gist.github.com/ollieatkinson/9f2748231612483e0cfd5c2cf76d44e9).
+See [behaviour compatibility](Documentation/ValuePond.md) for the scenario mapping
 and the explicit empty-source, cancellation, buffering and generation fixes.
-The older `Any?.Pond` remains available but is deprecated; its stale-source
-reference counting is fixed. Its non-`Sendable` `Any?` values are not a substitute
-for the typed API's concurrency contract.
+The two types have different purposes and coexist. `ValuePond` owns one shared
+value source; `Any?.Pond` maps requested routes to coarser Geyser sources and
+projects their updates into fine-grained streams. Pond remains supported and its
+stale-source reference counting is fixed. Its untyped `Any?` concurrency boundary
+is retained in the compatibility target.
 
 ### Composing sources with Lake
 
@@ -194,20 +196,21 @@ ambiguity checks, and delegate to the chosen source's `stream` method.
 Lake returns the original sequence directly. It creates no forwarding task, actor,
 buffer, replay cache or subscription registry. Sharing, pending/error values,
 backpressure, grace periods and cancellation belong to the source. Reuse the same
-Pond instance in a source closure to preserve that Pond's sharing across requests;
-constructing a new Pond per request would create independent upstream work. The
+ValuePond instance in a source closure to preserve that ValuePond's sharing across requests;
+constructing a new ValuePond per request would create independent upstream work. The
 Lake itself may be released while its returned sequence is being observed.
 
 Requests, sequences and elements must be `Sendable`, and source closures are
-`@Sendable`. This typed API can compose a modern `Pond`'s streams without
+`@Sendable`. This typed API can compose a modern `ValuePond`'s streams without
 changing their lifetime. The older `Any?.Pond` above emits non-`Sendable` `Any?`
 through its legacy sequence; it is **not directly compatible** with this Lake.
-Use a typed `Pond` for new composition. Lake adds no third-party runtime
-dependencies. The `OptionalSubscripts` target and its tests use Swift 6 language
+Use a typed `ValuePond` for new composition. Lake uses the public `Trie` below,
+backed by Swift Collections’ `OrderedDictionary`. The `OptionalSubscripts` target
+and its tests use Swift 6 language
 mode with complete concurrency checking. They use explicit `@concurrent` task
 entry and Swift 6.4 asynchronous `defer` for deterministic test cleanup.
 
-The untyped stores, original Pond and Combine bridges are retained in the
+The untyped stores, route-based Pond and Combine bridges are retained in the
 `OptionalSubscriptsLegacy` compatibility target in Swift 5 mode. Unconstrained
 legacy values cannot safely satisfy Swift 6's actor-to-stream transfer checks;
 this separation preserves their existing source API without weakening the typed
@@ -216,6 +219,29 @@ re-export. Existing Hope/XCTest coverage remains in a separate legacy test targe
 `swift-clocks` is a test-only dependency for deterministic grace periods;
 production code uses the standard `Clock`. CI requires the `xcode-27` runner and
 checks the installed Swift 6.4 toolchain.
+
+### A path-indexed Trie
+
+The public `Trie<Key, Value>` follows the [original Trie API](https://gist.github.com/ollieatkinson/6c11013dca11d6570112ef08f70f5a8b),
+using insertion-ordered branches from Swift Collections:
+
+```swift
+var trie = Trie<String, Int>(value: 0)
+trie[["api", "programme"]] = 42
+let value: Int? = trie[["api", "programme"]] // 42
+let subtree: Trie<String, Int>? = trie[["api"]]
+let fallback = trie.deepestValue(along: ["api", "programme", "title"]) // 42
+trie[["api", "other"], inserting: 10] += 1
+```
+
+The empty path addresses the root. Value assignment changes only that node's
+value, preserving descendants; subtree assignment replaces its whole branch,
+and assigning a nil subtree removes it. Optional nil values remain distinct
+from absent values. `depthFirstSearch()` visits parents before descendants with
+sorted siblings; `sorted: false` preserves sibling insertion order. Construction
+uses modifying dictionary subscripts. Lake captures a completed immutable trie
+for O(path-depth) source selection. Sendable conformance is conditional on the
+keys and values; ordinary local tries need no concurrency constraints.
 
 And a bunch of other (hopefully) useful new API.
 

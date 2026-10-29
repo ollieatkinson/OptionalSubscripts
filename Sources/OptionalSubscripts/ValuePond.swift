@@ -2,17 +2,17 @@ import Foundation
 
 /// Shares one upstream sequence, replaying its latest value to each subscriber.
 ///
-/// Adapted from Oliver Atkinson's Pond:
+/// Adapted from Oliver Atkinson's ValuePond:
 /// https://gist.github.com/ollieatkinson/9f2748231612483e0cfd5c2cf76d44e9
 /// Behaviour checked against revision 364b12981c80cda9008581cf2521de4ecdf8d7f1.
 ///
 /// Subscription starts when `stream` or `get` is called. The source stays alive
 /// while observed and for the grace period afterwards. A completed source's last
-/// value remains live while subscribed, matching the original Pond. Expiry clears replay;
+/// value remains live while subscribed, matching the original ValuePond. Expiry clears replay;
 /// the next subscriber starts a fresh source. Errors can be carried as Result or
 /// snapshot values, keeping recoverable failures inside the stream.
 @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
-public actor Pond<Source: AsyncSequence & Sendable>
+public actor ValuePond<Source: AsyncSequence & Sendable>
 where Source.Element: Sendable, Source.Failure == Never {
     public typealias Value = Source.Element
     public typealias BufferingPolicy = AsyncStream<Value>.Continuation.BufferingPolicy
@@ -166,7 +166,7 @@ where Source.Element: Sendable, Source.Failure == Never {
 }
 
 @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
-public extension Pond {
+public extension ValuePond {
     init<Value: Sendable>(
         cancellingGracePeriod: Duration = .seconds(60),
         clock: some Clock<Duration> = ContinuousClock(),

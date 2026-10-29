@@ -11,9 +11,12 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/screensailor/Hope.git", branch: "trunk"),
         .package(url: "https://github.com/pointfreeco/swift-clocks", exact: "1.1.1"),
+        .package(url: "https://github.com/apple/swift-collections", from: "1.7.5"),
     ],
     targets: [
-        .target(name: "OptionalSubscripts", dependencies: ["OptionalSubscriptsLegacy"]),
+        .target(name: "OptionalSubscripts", dependencies: [
+            "OptionalSubscriptsLegacy", .product(name: "OrderedCollections", package: "swift-collections"),
+        ]),
         // Any? streams and unconstrained legacy stores predate Sendable checking.
         // Keep their source compatibility without weakening the typed public core.
         .target(name: "OptionalSubscriptsLegacy", swiftSettings: [.swiftLanguageMode(.v5)]),

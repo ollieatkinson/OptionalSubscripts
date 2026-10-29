@@ -6,7 +6,6 @@ import Dispatch // TODO: #if canImport
 
 public extension Optional where Wrapped == Any {
 
-    @available(*, deprecated, message: "Use typed Pond streams and Lake on Swift 6 for Sendable sharing and composition.")
     actor Pond<Source> where Source: Geyser {
 
         public let source: Source

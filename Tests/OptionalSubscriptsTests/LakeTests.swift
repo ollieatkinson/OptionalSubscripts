@@ -270,10 +270,10 @@ struct LakeTests {
     }
 
     @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
-    @Test func composed_requests_share_one_pond_and_its_cancellation() async throws {
+    @Test func composed_requests_share_one_value_pond_and_its_cancellation() async throws {
         let counter = Counter()
         let (upstream, continuation) = AsyncStream<Int>.makeStream()
-        let pond = Pond(cancellingGracePeriod: .zero, source: {
+        let pond = ValuePond(cancellingGracePeriod: .zero, source: {
             await counter.increment()
             return upstream
         })

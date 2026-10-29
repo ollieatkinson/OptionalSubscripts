@@ -13,7 +13,7 @@ public struct Lake<Request: Sendable, Values: AsyncSequence & Sendable>: Sendabl
     private let open: Source
 
     /// Supplies custom routing, for example semantic type matching. The closure
-    /// can delegate to a Pond, a store, or another Lake's `stream` method.
+    /// can delegate to a ValuePond, a store, or another Lake's `stream` method.
     public init(stream: @escaping Source) {
         self.open = stream
     }

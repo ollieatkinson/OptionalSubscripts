@@ -1,181 +1,187 @@
-//
-// github.com/screensailor 2021
-//
+import Foundation
 
-import Dispatch // TODO: #if canImport
+/// Shares one upstream sequence, replaying its latest value to each subscriber.
+///
+/// Adapted from Oliver Atkinson's Pond:
+/// https://gist.github.com/ollieatkinson/9f2748231612483e0cfd5c2cf76d44e9
+/// Behaviour checked against revision 364b12981c80cda9008581cf2521de4ecdf8d7f1.
+///
+/// Subscription starts when `stream` or `get` is called. The source stays alive
+/// while observed and for the grace period afterwards. A completed source's last
+/// value remains live while subscribed, matching the original Pond. Expiry clears replay;
+/// the next subscriber starts a fresh source. Errors can be carried as Result or
+/// snapshot values, keeping recoverable failures inside the stream.
+@available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
+public actor Pond<Source: AsyncSequence & Sendable>
+where Source.Element: Sendable, Source.Failure == Never {
+    public typealias Value = Source.Element
+    public typealias BufferingPolicy = AsyncStream<Value>.Continuation.BufferingPolicy
 
-public extension Optional where Wrapped == Any {
-    
-    @available(*, deprecated, message: "Use typed ValuePond streams and Lake on Swift 6 for Sendable sharing and composition.")
-    actor Pond<Source> where Source: Geyser {
+    private enum Replay {
+        case empty
+        case value(Value)
+    }
 
-        public let source: Source
-        public let store: Optional<Any>.Store
-        
-        public private(set) var cancellingGracePeriodInNanoseconds: UInt64 = 0
-        public private(set) var sourceIDs: [Route: Source.GushID] = [:]
-        public private(set) var gushSources: [Source.GushID: GushSource] = [:]
+    private let source: @Sendable () async -> Source
+    private let gracePeriod: Duration
+    private let sleep: @Sendable () async throws -> Void
+    private var replay = Replay.empty
+    private var observers: [UUID: AsyncStream<Value>.Continuation] = [:]
+    private var upstream: Task<Void, Never>?
+    private var graceTask: Task<Void, Never>?
+    private var generation: UInt64 = 0
+    private var leaseVersion: UInt64 = 0
+    private var completed = false
 
-        public class GushSource {
-            
-            public fileprivate(set) var pendingContinuations: [PendingContinuation]?
-            public fileprivate(set) var cancelTimestamp: DispatchTime?
-            public fileprivate(set) var referenceCount: UInt = 0
-            
-            let task: Task<(), Error>
-            
-            init(task: Task<(), Error>, pending: PendingContinuation) {
-                self.task = task
-                self.pendingContinuations = [pending]
+    // Useful when diagnosing source lifetimes, without exposing continuations.
+    var referenceCount: Int { observers.count }
+
+    public init(
+        cancellingGracePeriod: Duration = .seconds(60),
+        clock: some Clock<Duration> = ContinuousClock(),
+        source: @escaping @Sendable () async -> Source
+    ) {
+        self.source = source
+        self.gracePeriod = max(.zero, cancellingGracePeriod)
+        self.sleep = { try await clock.sleep(for: cancellingGracePeriod) }
+    }
+
+    deinit {
+        upstream?.cancel()
+        graceTask?.cancel()
+        for continuation in observers.values { continuation.finish() }
+    }
+
+    public func stream(bufferingPolicy: BufferingPolicy = .unbounded) -> AsyncStream<Value> {
+        let (stream, continuation) = AsyncStream.makeStream(of: Value.self, bufferingPolicy: bufferingPolicy)
+        let id = UUID()
+        continuation.onTermination = { @Sendable [weak self] _ in
+            Task { @concurrent in await self?.remove(id) }
+        }
+        graceTask?.cancel()
+        graceTask = nil
+        leaseVersion &+= 1
+
+        if completed, case .empty = replay {
+            continuation.finish()
+            scheduleRelease()
+            return stream
+        }
+
+        observers[id] = continuation
+        if case .value(let value) = replay { continuation.yield(value) }
+        if upstream == nil, !completed { start() }
+        return stream
+    }
+
+    public func get() async throws -> Value {
+        try Task.checkCancellation()
+        var iterator = stream().makeAsyncIterator()
+        let value = await iterator.next()
+        try Task.checkCancellation()
+        guard let value else { throw GetError.finishedWithoutValue }
+        return value
+    }
+
+    public enum GetError: Error, Equatable, Sendable {
+        case finishedWithoutValue
+    }
+
+    /// Cancels the current source, closes subscribers and clears replay.
+    /// A subsequent subscription starts a fresh source.
+    public func cancel() {
+        let continuations = observers.values
+        observers.removeAll()
+        reset()
+        for continuation in continuations { continuation.finish() }
+    }
+
+    private func start() {
+        generation &+= 1
+        let generation = generation
+        let source = source
+        upstream = Task { @concurrent [weak self] in
+            let sequence = await source()
+            guard !Task.isCancelled else { return }
+            for await value in sequence {
+                guard !Task.isCancelled else { break }
+                await self?.publish(value, generation: generation)
             }
+            await self?.finish(generation: generation)
         }
+    }
 
-        public struct PendingContinuation {
-            
-            public let route: Route
-            public let limit: BufferingPolicy
-            
-            let continuation: Continuation
-        }
-        
-        public typealias Continuation = AsyncStream<AsyncStream<Any?>>.Continuation
+    private func publish(_ value: Value, generation: UInt64) {
+        guard self.generation == generation else { return }
+        replay = .value(value)
+        for continuation in observers.values { continuation.yield(value) }
+    }
 
-        public init(source: Source, store: Optional<Any>.Store = .init()) {
-            self.source = source
-            self.store = store
+    private func finish(generation: UInt64) {
+        guard self.generation == generation else { return }
+        upstream = nil
+        completed = true
+        if case .empty = replay {
+            let continuations = observers.values
+            observers.removeAll()
+            for continuation in continuations { continuation.finish() }
         }
+        if observers.isEmpty { scheduleRelease() }
+    }
+
+    private func remove(_ id: UUID) {
+        guard observers.removeValue(forKey: id) != nil else { return }
+        if observers.isEmpty { scheduleRelease() }
+    }
+
+    private func scheduleRelease() {
+        graceTask?.cancel()
+        leaseVersion &+= 1
+        guard gracePeriod > .zero else { return reset() }
+        let version = leaseVersion
+        graceTask = Task { @concurrent [weak self, sleep] in
+            do { try await sleep() } catch { return }
+            guard !Task.isCancelled else { return }
+            await self?.release(if: version)
+        }
+    }
+
+    private func release(if version: UInt64) {
+        // Check and cancellation share one actor turn, so a new subscriber
+        // cannot arrive between testing the lease and cancelling its source.
+        guard leaseVersion == version, observers.isEmpty else { return }
+        reset()
+    }
+
+    private func reset() {
+        generation &+= 1
+        leaseVersion &+= 1
+        upstream?.cancel()
+        upstream = nil
+        graceTask?.cancel()
+        graceTask = nil
+        completed = false
+        replay = .empty
     }
 }
 
-public extension Optional.Pond where Wrapped == Any {
-    
-    func setCancellingGracePeriod(to seconds: Double) {
-        cancellingGracePeriodInNanoseconds = UInt64(max(0, seconds * 1_000_000_000))
+@available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
+public extension Pond {
+    init<Value: Sendable>(
+        cancellingGracePeriod: Duration = .seconds(60),
+        clock: some Clock<Duration> = ContinuousClock(),
+        get: @escaping @Sendable () async -> Value
+    ) where Source == AsyncStream<Value> {
+        self.init(cancellingGracePeriod: cancellingGracePeriod, clock: clock) {
+            AsyncStream { continuation in
+                let task = Task { @concurrent in
+                    let value = await get()
+                    guard !Task.isCancelled else { return }
+                    continuation.yield(value)
+                    continuation.finish()
+                }
+                continuation.onTermination = { @Sendable _ in task.cancel() }
+            }
+        }
     }
 }
-
-public extension Optional.Pond where Wrapped == Any {
-    
-    typealias Route = Optional<Any>.Route
-    typealias Location = Optional<Any>.Location
-    
-    typealias Stream = AsyncFlatMapSequence<AsyncStream<AsyncStream<Any?>>, AsyncStream<Any?>>
-    typealias BufferingPolicy = AsyncStream<Any?>.Continuation.BufferingPolicy
-
-    @inlinable nonisolated func stream(_ route: Location..., bufferingPolicy: BufferingPolicy = .bufferingNewest(1)) -> Stream {
-        stream(route, bufferingPolicy: bufferingPolicy)
-    }
-    
-    nonisolated func stream<Route>(_ route: Route, bufferingPolicy: BufferingPolicy = .bufferingNewest(1)) -> Stream where Route: Collection, Route.Index == Int, Route.Element == Location {
-        AsyncStream { continuation in
-            Task {
-                try await stream(route, to: continuation, limit: bufferingPolicy)
-            }
-        }.flatMap{ $0 }
-    }
-}
-
-private extension Optional.Pond where Wrapped == Any {
-    
-    func stream<Route>(_ route: Route, to continuation: Continuation, limit: BufferingPolicy) async throws where Route: Collection, Route.Index == Int, Route.Element == Location {
-        
-        for try await src in await source.source(of: route) {
-            
-            guard let src = src else {
-                return // TODO: error handling?
-            }
-            
-            switch sourceIDs[src.route] {
-                
-            case let id? where id == src.id:
-                guard let gushSource = gushSources[src.id] else {
-                    assertionFailure("Missing gush source \(src.id)")
-                    return
-                }
-                if gushSource.pendingContinuations == nil {
-                    yield(route, to: continuation, limit: limit, with: src.id)
-                } else {
-                    gushSource.pendingContinuations?.append(
-                        PendingContinuation(route: Array(route), limit: limit, continuation: continuation)
-                    )
-                }
-                
-            case let id?: // where id != src.id:
-                cancel(task: id) // TODO: route counting?
-                fallthrough
-                
-            default:
-                let task = Task {
-                    for try await gush in await source.stream(src.id) {
-                        await store.set(src.route, to: gush)
-                        guard let gushSource = gushSources[src.id] else {
-                            assertionFailure("Missing gush source \(src.id)")
-                            return
-                        }
-                        if let pending = gushSource.pendingContinuations {
-                            gushSource.pendingContinuations = nil
-                            for o in pending {
-                                yield(o.route, to: o.continuation, limit: o.limit, with: src.id)
-                            }
-                        }
-                    }
-                }
-                sourceIDs[src.route] = src.id
-                gushSources[src.id] = GushSource(
-                    task: task,
-                    pending: PendingContinuation(route: Array(route), limit: limit, continuation: continuation)
-                )
-            }
-        }
-    }
-    
-    func yield<Route>(_ route: Route, to continuation: Continuation, limit: BufferingPolicy, with source: Source.GushID) where Route: Collection, Route.Index == Int, Route.Element == Location {
-        guard let owner = gushSources[source] else { return }
-        let stream = AsyncStream<Any?>{ continuation in
-            count(for: source, owner: owner, of: +1)
-            let task = Task {
-                for await o in await store.stream(route, bufferingPolicy: limit) {
-                    continuation.yield(o)
-                }
-            }
-            continuation.onTermination = { @Sendable [weak self] _ in
-                task.cancel()
-                Task { [weak self] in
-                    await self?.count(for: source, owner: owner, of: -1)
-                }
-            }
-        }
-        continuation.yield(stream)
-    }
-    
-    func count(for id: Source.GushID, owner: GushSource, of change: Int) {
-        // Termination can arrive after remapping or after a new source reuses
-        // this ID. It must never decrement that new source's reference count.
-        guard let o = gushSources[id], o === owner else { return }
-        let result = Int(o.referenceCount) + change
-        o.referenceCount = UInt(max(0, result))
-        if result > 0 {
-            o.cancelTimestamp = nil
-        }
-        else if cancellingGracePeriodInNanoseconds > 0 {
-            o.cancelTimestamp = .now()
-            Task { [t = o.cancelTimestamp, sleep = cancellingGracePeriodInNanoseconds] in
-                try await Task.sleep(nanoseconds: sleep)
-                guard gushSources[id] === o, o.cancelTimestamp == t else {
-                    return
-                }
-                cancel(task: id)
-            }
-        }
-        else {
-            cancel(task: id)
-        }
-    }
-    
-    func cancel(task id: Source.GushID) {
-        gushSources.removeValue(forKey: id)?.task.cancel()
-        sourceIDs = sourceIDs.filter { $0.value != id }
-    }
-}
-
-

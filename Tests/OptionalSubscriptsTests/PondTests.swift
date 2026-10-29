@@ -1,14 +1,14 @@
-#if compiler(>=6.0) && canImport(Testing)
 import Clocks
 import Synchronization
 @testable import OptionalSubscripts
 import Testing
 
-@Suite(.timeLimit(.minutes(1))) struct ValuePondTests {
+@Suite(.timeLimit(.minutes(1))) struct PondTests {
     @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
     @Test func mapped_sequences_preserve_values_and_share_the_underlying_source() async {
         let source = PondSource()
-        let pond = ValuePond(source: { await source.open().map { $0 * 2 } })
+        let pond = Pond(source: { await source.open().map { $0 * 2 } })
+        defer { await pond.cancel() }
         var events = source.events.makeAsyncIterator()
         var first = await pond.stream().makeAsyncIterator()
         var second = await pond.stream().makeAsyncIterator()
@@ -24,7 +24,7 @@ import Testing
     @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
     @Test func releasing_the_owner_finishes_observers_and_cancels_upstream() async {
         let source = PondSource()
-        var pond: ValuePond<AsyncStream<Int>>? = ValuePond(source: { await source.open() })
+        var pond: Pond<AsyncStream<Int>>? = Pond(source: { await source.open() })
         var events = source.events.makeAsyncIterator()
         var values = await pond!.stream().makeAsyncIterator()
         #expect(await events.next() == .opened(1))
@@ -37,9 +37,10 @@ import Testing
     @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
     @Test func cancelling_get_releases_its_pending_subscription() async {
         let source = PondSource()
-        let pond = ValuePond(cancellingGracePeriod: .zero, source: { await source.open() })
+        let pond = Pond(cancellingGracePeriod: .zero, source: { await source.open() })
+        defer { await pond.cancel() }
         var events = source.events.makeAsyncIterator()
-        let task = Task { try await pond.get() }
+        let task = Task { @concurrent in try await pond.get() }
         #expect(await events.next() == .opened(1))
 
         task.cancel()
@@ -51,7 +52,8 @@ import Testing
     @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
     @Test func pending_subscribers_share_one_source_and_late_subscribers_get_replay() async {
         let source = PondSource()
-        let pond = ValuePond(source: { await source.open() })
+        let pond = Pond(source: { await source.open() })
+        defer { await pond.cancel() }
         var events = source.events.makeAsyncIterator()
         var first = await pond.stream().makeAsyncIterator()
         var second = await pond.stream().makeAsyncIterator()
@@ -72,10 +74,11 @@ import Testing
     @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
     @Test func cancelling_before_the_first_value_preserves_the_remaining_subscriber() async throws {
         let source = PondSource()
-        let pond = ValuePond(cancellingGracePeriod: .zero, source: { await source.open() })
+        let pond = Pond(cancellingGracePeriod: .zero, source: { await source.open() })
+        defer { await pond.cancel() }
         var events = source.events.makeAsyncIterator()
         let stream = await pond.stream()
-        let task = Task { for await _ in stream {} }
+        let task = Task { @concurrent in for await _ in stream {} }
         var remaining = await pond.stream().makeAsyncIterator()
         #expect(await events.next() == .opened(1))
         task.cancel()
@@ -90,10 +93,11 @@ import Testing
     @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
     @Test func the_final_cancellation_releases_a_source_waiting_for_its_first_value() async {
         let source = PondSource()
-        let pond = ValuePond(cancellingGracePeriod: .zero, source: { await source.open() })
+        let pond = Pond(cancellingGracePeriod: .zero, source: { await source.open() })
+        defer { await pond.cancel() }
         var events = source.events.makeAsyncIterator()
         let stream = await pond.stream()
-        let task = Task { for await _ in stream {} }
+        let task = Task { @concurrent in for await _ in stream {} }
         #expect(await events.next() == .opened(1))
         task.cancel()
         await task.value
@@ -105,7 +109,8 @@ import Testing
     @Test func completed_sources_keep_subscribers_and_replay_until_they_leave() async throws {
         let source = PondSource()
         let clock = TestClock()
-        let pond = ValuePond(cancellingGracePeriod: .seconds(5), clock: clock, source: { await source.open() })
+        let pond = Pond(cancellingGracePeriod: .seconds(5), clock: clock, source: { await source.open() })
+        defer { await pond.cancel() }
         var events = source.events.makeAsyncIterator()
         var values = await pond.stream().makeAsyncIterator()
         #expect(await events.next() == .opened(1))
@@ -129,7 +134,8 @@ import Testing
     @Test func one_shot_get_refreshes_only_after_the_grace_period() async throws {
         let counter = PondCounter()
         let clock = TestClock()
-        let pond = ValuePond(cancellingGracePeriod: .seconds(20), clock: clock, get: { await counter.next() })
+        let pond = Pond(cancellingGracePeriod: .seconds(20), clock: clock, get: { await counter.next() })
+        defer { await pond.cancel() }
 
         #expect(try await pond.get() == 1)
         try await waitUntil { await pond.referenceCount == 0 }
@@ -144,9 +150,10 @@ import Testing
     @Test func get_reads_the_latest_value_while_upstream_is_retained() async throws {
         let source = PondSource()
         let clock = TestClock()
-        let pond = ValuePond(clock: clock, source: { await source.open() })
+        let pond = Pond(clock: clock, source: { await source.open() })
+        defer { await pond.cancel() }
         var events = source.events.makeAsyncIterator()
-        let first = Task { try await pond.get() }
+        let first = Task { @concurrent in try await pond.get() }
         #expect(await events.next() == .opened(1))
         await source.send(0, to: 1)
         #expect(try await first.value == 0)
@@ -165,9 +172,10 @@ import Testing
     func cancellation_waits_for_the_full_grace_period(using_get: Bool) async throws {
         let source = PondSource()
         let clock = TestClock()
-        let pond = ValuePond(cancellingGracePeriod: .seconds(5), clock: clock, source: { await source.open() })
+        let pond = Pond(cancellingGracePeriod: .seconds(5), clock: clock, source: { await source.open() })
+        defer { await pond.cancel() }
         var events = source.events.makeAsyncIterator()
-        let task = Task {
+        let task = Task { @concurrent in
             if using_get { _ = try? await pond.get() }
             else { for await _ in await pond.stream() {} }
         }
@@ -186,9 +194,10 @@ import Testing
     @Test func multiple_cancellations_start_the_deadline_only_after_the_last_subscriber() async throws {
         let source = PondSource()
         let clock = TestClock()
-        let pond = ValuePond(cancellingGracePeriod: .seconds(5), clock: clock, source: { await source.open() })
+        let pond = Pond(cancellingGracePeriod: .seconds(5), clock: clock, source: { await source.open() })
+        defer { await pond.cancel() }
         var events = source.events.makeAsyncIterator()
-        let tasks = (0..<10).map { _ in Task { for await _ in await pond.stream() {} } }
+        let tasks = (0..<10).map { _ in Task { @concurrent in for await _ in await pond.stream() {} } }
         #expect(await events.next() == .opened(1))
         try await waitUntil { await pond.referenceCount == 10 }
 
@@ -213,9 +222,10 @@ import Testing
         let clock = TestClock()
         let source = PondTimer(clock: clock)
         let collected = PondValues()
-        let pond = ValuePond(cancellingGracePeriod: .seconds(5), clock: clock, source: { await source.open() })
+        let pond = Pond(cancellingGracePeriod: .seconds(5), clock: clock, source: { await source.open() })
+        defer { await pond.cancel() }
         var starts = source.starts.makeAsyncIterator()
-        let first = Task { for await value in await pond.stream() { await collected.append(value) } }
+        let first = Task { @concurrent in for await value in await pond.stream() { await collected.append(value) } }
         #expect(await starts.next() == 1)
         for (advance, total) in [(1, 1), (2, 3), (2, 5), (15, 20)] {
             await clock.advance(by: .seconds(advance))
@@ -229,7 +239,7 @@ import Testing
         await clock.advance(by: .seconds(10))
         #expect(await collected.values == Array(1...20))
 
-        let second = Task { for await value in await pond.stream() { await collected.append(value) } }
+        let second = Task { @concurrent in for await value in await pond.stream() { await collected.append(value) } }
         #expect(await starts.next() == 2)
         await clock.advance(by: .seconds(10))
         try await waitUntil { await collected.values.count >= 30 }
@@ -242,9 +252,10 @@ import Testing
     @Test func get_cancelled_before_acquisition_does_not_start_a_source() async {
         let source = PondSource()
         let gate = PondGate()
-        let pond = ValuePond(source: { await source.open() })
+        let pond = Pond(source: { await source.open() })
+        defer { await pond.cancel() }
         var entered = gate.entered.makeAsyncIterator()
-        let task = Task {
+        let task = Task { @concurrent in
             await gate.wait()
             return try await pond.get()
         }
@@ -257,11 +268,13 @@ import Testing
 
     @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
     @Test func empty_completion_and_optional_nil_are_distinct() async throws {
-        let empty = ValuePond(source: { AsyncStream<Int> { $0.finish() } })
-        await #expect(throws: ValuePond<AsyncStream<Int>>.GetError.finishedWithoutValue) {
+        let empty = Pond(source: { AsyncStream<Int> { $0.finish() } })
+        defer { await empty.cancel() }
+        await #expect(throws: Pond<AsyncStream<Int>>.GetError.finishedWithoutValue) {
             try await empty.get()
         }
-        let optional = ValuePond(get: { Optional<Int>.none })
+        let optional = Pond(get: { Optional<Int>.none })
+        defer { await optional.cancel() }
         let value = try await optional.get()
         #expect(value == nil)
     }
@@ -269,7 +282,8 @@ import Testing
     @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
     @Test func subscriber_buffering_applies_without_an_unbounded_forwarding_stream() async {
         let source = PondSource()
-        let pond = ValuePond(source: { await source.open() })
+        let pond = Pond(source: { await source.open() })
+        defer { await pond.cancel() }
         var events = source.events.makeAsyncIterator()
         var slow = await pond.stream(bufferingPolicy: .bufferingNewest(1)).makeAsyncIterator()
         var fast = await pond.stream().makeAsyncIterator()
@@ -285,10 +299,11 @@ import Testing
     @Test func grace_expiry_releases_upstream_and_discards_old_replay() async throws {
         let source = PondSource()
         let clock = TestClock()
-        let pond = ValuePond(cancellingGracePeriod: .seconds(5), clock: clock, source: { await source.open() })
+        let pond = Pond(cancellingGracePeriod: .seconds(5), clock: clock, source: { await source.open() })
+        defer { await pond.cancel() }
         var events = source.events.makeAsyncIterator()
         let stream = await pond.stream()
-        let task = Task { for await _ in stream {} }
+        let task = Task { @concurrent in for await _ in stream {} }
         #expect(await events.next() == .opened(1))
         await source.send(1, to: 1)
         // A second consumer confirms that replay has actually been populated.
@@ -309,10 +324,11 @@ import Testing
     @Test func a_returning_subscriber_invalidates_the_old_grace_deadline() async throws {
         let source = PondSource()
         let clock = TestClock()
-        let pond = ValuePond(cancellingGracePeriod: .seconds(5), clock: clock, source: { await source.open() })
+        let pond = Pond(cancellingGracePeriod: .seconds(5), clock: clock, source: { await source.open() })
+        defer { await pond.cancel() }
         var events = source.events.makeAsyncIterator()
         let stream = await pond.stream()
-        let task = Task { for await _ in stream {} }
+        let task = Task { @concurrent in for await _ in stream {} }
         #expect(await events.next() == .opened(1))
         task.cancel()
         await task.value
@@ -329,11 +345,12 @@ import Testing
     @Test func a_cancelled_factory_cannot_publish_into_a_new_generation() async {
         let source = PondSource()
         let gate = PondGate()
-        let pond = ValuePond(cancellingGracePeriod: .zero, source: {
+        let pond = Pond(cancellingGracePeriod: .zero, source: {
             let (id, stream) = await source.openWithID()
             if id == 1 { await gate.wait() }
             return stream
         })
+        defer { await pond.cancel() }
         var events = source.events.makeAsyncIterator()
         var entered = gate.entered.makeAsyncIterator()
         var old = await pond.stream().makeAsyncIterator()
@@ -419,7 +436,7 @@ private actor PondTimer {
         count += 1
         let origin = clock.now
         let stream = AsyncStream<Int> { continuation in
-            let task = Task { [clock] in
+            let task = Task { @concurrent [clock] in
                 do {
                     for value in 1...1000 {
                         try await clock.sleep(until: origin.advanced(by: .seconds(value)))
@@ -464,5 +481,3 @@ private func waitUntil(_ predicate: () async -> Bool) async throws {
         await Task.yield()
     }
 }
-
-#endif

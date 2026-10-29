@@ -1,6 +1,9 @@
 # Optional Subscripts
+
+Requires Swift 6.4 / Xcode 27.
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://github.com/screensailor/OptionalSubscripts/actions/workflows/tests.yml/badge.svg)](https://github.com/screensailor/OptionalSubscripts/actions/workflows/tests.yml)
+[![Tests](https://github.com/ollieatkinson/OptionalSubscripts/actions/workflows/tests.yml/badge.svg)](https://github.com/ollieatkinson/OptionalSubscripts/actions/workflows/tests.yml)
 
 All equality expressions in this document return `true`:
 ```swift
@@ -108,15 +111,15 @@ protocol Geyser {
 }
 ```
 
-### Sharing a typed source with ValuePond
+### Sharing a typed source with Pond
 
-On Swift 6, `ValuePond` shares one nonthrowing `AsyncSequence`, replaying its latest
+`Pond` shares one nonthrowing `AsyncSequence`, replaying its latest
 value to each subscriber. It is available on macOS 15, iOS 18, tvOS 18 and watchOS 11
 or newer; the rest of the package keeps its existing deployment requirements.
 
 ```swift
 let store = ValueStore(42)
-let pond = ValuePond(cancellingGracePeriod: .seconds(5), source: {
+let pond = Pond(cancellingGracePeriod: .seconds(5), source: {
     await store.stream()
 })
 
@@ -136,7 +139,7 @@ subscription start afresh. A custom `Clock<Duration>` can control grace periods.
 
 The implementation and tests preserve the updated
 [original Pond examples](https://gist.github.com/ollieatkinson/9f2748231612483e0cfd5c2cf76d44e9).
-See [behaviour compatibility](Documentation/ValuePond.md) for the scenario mapping
+See [behaviour compatibility](Documentation/Pond.md) for the scenario mapping
 and the explicit empty-source, cancellation, buffering and generation fixes.
 The older `Any?.Pond` remains available but is deprecated; its stale-source
 reference counting is fixed. Its non-`Sendable` `Any?` values are not a substitute
@@ -145,7 +148,9 @@ for the typed API's concurrency contract.
 ### Composing sources with Lake
 
 `Lake<Request, Values>` routes requests to asynchronous sources. Its prefix mounts
-choose the deepest match, independently of registration order:
+choose the deepest match, independently of registration order. Mounts are stored
+in an immutable trie built once at initialization; each lookup is O(route depth),
+independent of the number of sibling mounts:
 
 ```swift
 let local = [String: String].Store(["profile/name": "Dorothy"])
@@ -194,14 +199,23 @@ constructing a new Pond per request would create independent upstream work. The
 Lake itself may be released while its returned sequence is being observed.
 
 Requests, sequences and elements must be `Sendable`, and source closures are
-`@Sendable`. This typed API can compose a modern `ValuePond`'s streams without
+`@Sendable`. This typed API can compose a modern `Pond`'s streams without
 changing their lifetime. The older `Any?.Pond` above emits non-`Sendable` `Any?`
 through its legacy sequence; it is **not directly compatible** with this Lake.
-Use a typed `ValuePond` for new composition. Lake adds no runtime dependencies or
-platform/language-mode upgrade; legacy files remain in Swift 5 mode.
-The implementation supports complete concurrency checking in Swift 6. The new
-Swift Testing tests run on Swift 6 when that framework is available; Hope/XCTest coverage is retained. Swift 6 test builds add `swift-clocks` for
-deterministic grace-period tests; production code uses the standard `Clock`.
+Use a typed `Pond` for new composition. Lake adds no third-party runtime
+dependencies. The `OptionalSubscripts` target and its tests use Swift 6 language
+mode with complete concurrency checking. They use explicit `@concurrent` task
+entry and Swift 6.4 asynchronous `defer` for deterministic test cleanup.
+
+The untyped stores, original Pond and Combine bridges are retained in the
+`OptionalSubscriptsLegacy` compatibility target in Swift 5 mode. Unconstrained
+legacy values cannot safely satisfy Swift 6's actor-to-stream transfer checks;
+this separation preserves their existing source API without weakening the typed
+core. `import OptionalSubscripts` continues to expose those APIs through a
+re-export. Existing Hope/XCTest coverage remains in a separate legacy test target.
+`swift-clocks` is a test-only dependency for deterministic grace periods;
+production code uses the standard `Clock`. CI requires the `xcode-27` runner and
+checks the installed Swift 6.4 toolchain.
 
 And a bunch of other (hopefully) useful new API.
 

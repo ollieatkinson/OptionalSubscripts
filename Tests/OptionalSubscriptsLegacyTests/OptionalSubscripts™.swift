@@ -4,7 +4,7 @@
 
 @_exported import Hope
 @_exported import Combine
-@_exported @testable import OptionalSubscripts
+@_exported @testable import OptionalSubscriptsLegacy
 
 typealias Route = Optional<Any>.Route
 typealias Location = Optional<Any>.Location

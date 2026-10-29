@@ -49,23 +49,24 @@ public extension Lake {
 
     /// The deepest matching prefix wins, independently of registration order.
     /// An empty route mounts a default source. Duplicate routes are rejected.
+    /// An immutable trie is built once; selection takes O(route depth).
     init<Key>(
         mounts: [Mount<Key>],
         route: @escaping @Sendable (Request) -> [Key]
     ) throws {
-        var routes: Set<[Key]> = []
+        var trie = Trie<Key, Source>()
         for mount in mounts {
-            guard routes.insert(mount.route).inserted else {
+            guard trie.insert(mount.route, value: mount.source) else {
                 throw RoutingError<Key>.duplicateMount(mount.route)
             }
         }
-        let mounts = mounts.sorted { $0.route.count > $1.route.count }
+        let sources = trie
         self.init { request in
             let path = route(request)
-            guard let mount = mounts.first(where: { path.starts(with: $0.route) }) else {
+            guard let source = sources.deepestValue(along: path) else {
                 throw RoutingError<Key>.unmounted(path)
             }
-            return try await mount.source(request)
+            return try await source(request)
         }
     }
 

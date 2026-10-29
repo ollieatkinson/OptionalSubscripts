@@ -2,7 +2,7 @@
 // github.com/screensailor 2021
 //
 
-@testable import OptionalSubscripts
+@testable import OptionalSubscriptsLegacy
 
 final class Tree™: Hopes {
     

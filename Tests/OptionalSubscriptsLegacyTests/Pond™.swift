@@ -2,7 +2,7 @@
 // github.com/screensailor 2021
 //
 
-@testable import OptionalSubscripts
+@testable import OptionalSubscriptsLegacy
 
 import Combine
 
@@ -209,7 +209,6 @@ extension Pond™ {
     }
 }
 
-#if compiler(>=6.0) && canImport(Testing)
 import Testing
 
 @Suite(.timeLimit(.minutes(1)))
@@ -227,4 +226,3 @@ struct LegacyPondTests {
         #expect(await values.next() as? String == "red")
     }
 }
-#endif

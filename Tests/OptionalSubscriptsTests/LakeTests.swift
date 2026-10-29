@@ -1,4 +1,3 @@
-#if compiler(>=6.0) && canImport(Testing)
 @testable import OptionalSubscripts
 import Testing
 
@@ -28,6 +27,35 @@ struct LakeTests {
         #expect(other == ["default"])
     }
 
+    @Test func deep_routes_keep_the_deepest_prefix_and_original_request() async throws {
+        let path = (0..<256).map { "segment-\($0)" }
+        let lake = try Routed(mounts: [
+            .init(at: Array(path.prefix(128)), source: { _ in Self.values("ancestor") }),
+            .init(at: path, source: { Self.values($0.joined(separator: "/")) }),
+            .init(at: [], source: { _ in Self.values("default") }),
+            .init(at: Array(path.prefix(64)), source: { _ in Self.values("general") }),
+        ])
+        let child = path + ["leaf"]
+        #expect(try await lake.stream(child).reduce(into: []) { $0.append($1) } == [child.joined(separator: "/")])
+        let divergent = Array(path.prefix(200)) + ["other"]
+        #expect(try await lake.stream(divergent).reduce(into: []) { $0.append($1) } == ["ancestor"])
+    }
+
+    @Test func wide_sibling_routes_match_complete_components() async throws {
+        let siblings: [Routed.Mount<String>] = (0..<1_024).map { index in
+            let name = "branch-\(index)"
+            return .init(at: ["api", name], source: { request in Self.values(name, request.last) })
+        }
+        let lake = try Routed(mounts: siblings.reversed() + [
+            .init(at: [], source: { _ in Self.values("default") }),
+        ])
+        for index in [0, 512, 1_023] {
+            let name = "branch-\(index)"
+            #expect(try await lake.stream(["api", name, "leaf"]).reduce(into: []) { $0.append($1) } == [name, "leaf"])
+        }
+        #expect(try await lake.stream(["api", "branch-10230"]).reduce(into: []) { $0.append($1) } == ["default"])
+    }
+
     @Test func optional_subscript_routes_keep_keys_and_indices_distinct() async throws {
         typealias Native = Lake<Any?.Route, AsyncStream<String?>>
         let lake = try Native(mounts: [
@@ -46,6 +74,10 @@ struct LakeTests {
         }
         #expect(throws: Routed.RoutingError<String>.duplicateMount(["api"])) {
             try Routed(mounts: [mount, mount])
+        }
+        let root = Routed.Mount<String>(at: [], source: { _ in Self.values("default") })
+        #expect(throws: Routed.RoutingError<String>.duplicateMount([])) {
+            try Routed(mounts: [root, root])
         }
         let lake = try Routed(mounts: [mount])
         await #expect(throws: Routed.RoutingError<String>.unmounted(["other"])) {
@@ -162,7 +194,7 @@ struct LakeTests {
                 didStart.finish()
             }
         }
-        let reader = Task {
+        let reader = Task { @concurrent in
             for await _ in try await lake.stream("live") {}
         }
         for await _ in started { break }
@@ -177,7 +209,7 @@ struct LakeTests {
             await counter.increment()
             return Self.values("unexpected")
         }
-        let task = Task {
+        let task = Task { @concurrent in
             withUnsafeCurrentTask { $0?.cancel() }
             return try await lake.stream([])
         }
@@ -205,7 +237,7 @@ struct LakeTests {
             await gate.wait()
             return Self.values("too late")
         }
-        let opening = Task { try await lake.stream([]) }
+        let opening = Task { @concurrent in try await lake.stream([]) }
         for await _ in started { break }
         opening.cancel()
         await gate.release()
@@ -241,10 +273,11 @@ struct LakeTests {
     @Test func composed_requests_share_one_pond_and_its_cancellation() async throws {
         let counter = Counter()
         let (upstream, continuation) = AsyncStream<Int>.makeStream()
-        let pond = ValuePond(cancellingGracePeriod: .zero, source: {
+        let pond = Pond(cancellingGracePeriod: .zero, source: {
             await counter.increment()
             return upstream
         })
+        defer { await pond.cancel() }
         let lake = try Lake<Route, AsyncStream<Int>>(mounts: [
             .init(at: ["data"], source: { _ in await pond.stream() }),
         ])
@@ -265,5 +298,3 @@ struct LakeTests {
         func increment() { value += 1 }
     }
 }
-
-#endif

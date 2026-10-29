@@ -142,6 +142,67 @@ The older `Any?.Pond` remains available but is deprecated; its stale-source
 reference counting is fixed. Its non-`Sendable` `Any?` values are not a substitute
 for the typed API's concurrency contract.
 
+### Composing sources with Lake
+
+`Lake<Request, Values>` routes requests to asynchronous sources. Its prefix mounts
+choose the deepest match, independently of registration order:
+
+```swift
+let local = [String: String].Store(["profile/name": "Dorothy"])
+let remote = [String: String].Store(["remote/profile/name": "Witch"])
+
+typealias Documents = Lake<[String], AsyncStream<String?>>
+let lake = try Documents(mounts: [
+    .init(at: [], source: { route in
+        await local.stream(route.joined(separator: "/"))
+    }),
+    .init(at: ["remote"], source: { route in
+        await remote.stream(route.joined(separator: "/"))
+    }),
+])
+
+for await name in try await lake.stream(["remote", "profile", "name"]) {
+    print(name as Any) // Optional("Witch"), followed by live updates
+}
+```
+
+An empty mount route supplies a default. Duplicate routes throw at construction;
+an unmatched request throws before any source opens. Prefixes match complete
+components (`["api"]` does not match `["apiary"]`). Sources receive the full route,
+including its mount prefix. A selected source's missing value, empty completion
+or error never falls back to another mount.
+
+Lakes nest using the same source closure:
+
+```swift
+let outer = try Documents(mounts: [
+    .init(at: ["remote"], source: { try await lake.stream($0) }),
+])
+```
+
+`Any?.Route` (including key and index components) can also be used directly as
+the request. A request can carry more than its route. Use `init(mounts:route:)`
+to extract the routing components while preserving the original request for the selected source.
+Use `init(stream:)` for custom selection, such as semantic inheritance or
+ambiguity checks, and delegate to the chosen source's `stream` method.
+
+Lake returns the original sequence directly. It creates no forwarding task, actor,
+buffer, replay cache or subscription registry. Sharing, pending/error values,
+backpressure, grace periods and cancellation belong to the source. Reuse the same
+Pond instance in a source closure to preserve that Pond's sharing across requests;
+constructing a new Pond per request would create independent upstream work. The
+Lake itself may be released while its returned sequence is being observed.
+
+Requests, sequences and elements must be `Sendable`, and source closures are
+`@Sendable`. This typed API can compose a modern `ValuePond`'s streams without
+changing their lifetime. The older `Any?.Pond` above emits non-`Sendable` `Any?`
+through its legacy sequence; it is **not directly compatible** with this Lake.
+Use a typed `ValuePond` for new composition. Lake adds no runtime dependencies or
+platform/language-mode upgrade; legacy files remain in Swift 5 mode.
+The implementation supports complete concurrency checking in Swift 6. The new
+Swift Testing tests run on Swift 6 when that framework is available; Hope/XCTest coverage is retained. Swift 6 test builds add `swift-clocks` for
+deterministic grace-period tests; production code uses the standard `Clock`.
+
 And a bunch of other (hopefully) useful new API.
 
 (Decent documentation and an overall statement of purpose is forthcoming 😜)

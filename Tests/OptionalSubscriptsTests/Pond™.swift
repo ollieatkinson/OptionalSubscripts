@@ -208,3 +208,23 @@ extension Pond™ {
         }
     }
 }
+
+#if compiler(>=6.0) && canImport(Testing)
+import Testing
+
+@Suite(.timeLimit(.minutes(1)))
+struct LegacyPondTests {
+    @Test func remapping_can_return_to_a_previously_cancelled_source_id() async {
+        let db = Pond™.Database()
+        let pond = Any?.Pond(source: db)
+        await db.store.set("v/1.0/way/to", "heart", to: "red")
+        await db.store.set("v/2.0/way/to", "heart", to: "blue")
+        var values = pond.stream("way", "to", "heart").makeAsyncIterator()
+        #expect(await values.next() as? String == "red")
+        await db.setVersion(to: "v/2.0/")
+        #expect(await values.next() as? String == "blue")
+        await db.setVersion(to: "v/1.0/")
+        #expect(await values.next() as? String == "red")
+    }
+}
+#endif

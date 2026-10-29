@@ -108,6 +108,40 @@ protocol Geyser {
 }
 ```
 
+### Sharing a typed source with ValuePond
+
+On Swift 6, `ValuePond` shares one nonthrowing `AsyncSequence`, replaying its latest
+value to each subscriber. It is available on macOS 15, iOS 18, tvOS 18 and watchOS 11
+or newer; the rest of the package keeps its existing deployment requirements.
+
+```swift
+let store = ValueStore(42)
+let pond = ValuePond(cancellingGracePeriod: .seconds(5), source: {
+    await store.stream()
+})
+
+let answer = try await pond.get() // 42
+for await value in await pond.stream() {
+    print(value) // replay, followed by live updates
+}
+```
+
+Pending subscribers share one source. A finite source's final value stays live
+while subscribed, and expiry after the last subscriber clears replay before the
+next source starts. Each subscriber chooses its own buffering policy. `get()`
+throws on cancellation or completion without any value; an emitted optional `nil`
+is a value and is replayed normally. Carry recoverable failures as `Result` or
+snapshot elements. `cancel()` closes subscribers, clears replay and lets the next
+subscription start afresh. A custom `Clock<Duration>` can control grace periods.
+
+The implementation and tests preserve the updated
+[original Pond examples](https://gist.github.com/ollieatkinson/9f2748231612483e0cfd5c2cf76d44e9).
+See [behaviour compatibility](Documentation/ValuePond.md) for the scenario mapping
+and the explicit empty-source, cancellation, buffering and generation fixes.
+The older `Any?.Pond` remains available but is deprecated; its stale-source
+reference counting is fixed. Its non-`Sendable` `Any?` values are not a substitute
+for the typed API's concurrency contract.
+
 And a bunch of other (hopefully) useful new API.
 
 (Decent documentation and an overall statement of purpose is forthcoming 😜)

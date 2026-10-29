@@ -9,13 +9,12 @@ on:
 jobs:
   build:
 
-    runs-on: macos-latest
+    runs-on: macos-15
 
     steps:
     - uses: actions/checkout@v2
-    - name: Setup Xcode
-      shell: bash
-      run: sudo xcode-select -switch /Applications/Xcode_13.2.1.app
+    - name: Toolchain
+      run: swift --version
     - name: Build
       run: swift build -v
     - name: Run tests

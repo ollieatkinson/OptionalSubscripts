@@ -6,6 +6,7 @@ import Dispatch // TODO: #if canImport
 
 public extension Optional where Wrapped == Any {
     
+    @available(*, deprecated, message: "Use typed ValuePond streams and Lake on Swift 6 for Sendable sharing and composition.")
     actor Pond<Source> where Source: Geyser {
 
         public let source: Source
@@ -129,8 +130,9 @@ private extension Optional.Pond where Wrapped == Any {
     }
     
     func yield<Route>(_ route: Route, to continuation: Continuation, limit: BufferingPolicy, with source: Source.GushID) where Route: Collection, Route.Index == Int, Route.Element == Location {
+        guard let owner = gushSources[source] else { return }
         let stream = AsyncStream<Any?>{ continuation in
-            count(for: source, of: +1)
+            count(for: source, owner: owner, of: +1)
             let task = Task {
                 for await o in await store.stream(route, bufferingPolicy: limit) {
                     continuation.yield(o)
@@ -139,28 +141,27 @@ private extension Optional.Pond where Wrapped == Any {
             continuation.onTermination = { @Sendable [weak self] _ in
                 task.cancel()
                 Task { [weak self] in
-                    await self?.count(for: source, of: -1)
+                    await self?.count(for: source, owner: owner, of: -1)
                 }
             }
         }
         continuation.yield(stream)
     }
     
-    func count(for id: Source.GushID, of change: Int) {
-        guard let o = gushSources[id] else {
-            assertionFailure("😱 Reference counting (\(change)) of non existant sourece '\(id)'")
-            return
-        }
+    func count(for id: Source.GushID, owner: GushSource, of change: Int) {
+        // Termination can arrive after remapping or after a new source reuses
+        // this ID. It must never decrement that new source's reference count.
+        guard let o = gushSources[id], o === owner else { return }
         let result = Int(o.referenceCount) + change
+        o.referenceCount = UInt(max(0, result))
         if result > 0 {
-            o.referenceCount = UInt(result)
             o.cancelTimestamp = nil
         }
         else if cancellingGracePeriodInNanoseconds > 0 {
             o.cancelTimestamp = .now()
             Task { [t = o.cancelTimestamp, sleep = cancellingGracePeriodInNanoseconds] in
                 try await Task.sleep(nanoseconds: sleep)
-                guard o.cancelTimestamp == t else {
+                guard gushSources[id] === o, o.cancelTimestamp == t else {
                     return
                 }
                 cancel(task: id)
@@ -173,6 +174,7 @@ private extension Optional.Pond where Wrapped == Any {
     
     func cancel(task id: Source.GushID) {
         gushSources.removeValue(forKey: id)?.task.cancel()
+        sourceIDs = sourceIDs.filter { $0.value != id }
     }
 }
 

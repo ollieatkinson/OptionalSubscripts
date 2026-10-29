@@ -21,6 +21,6 @@ jobs:
     - name: Build
       run: swift build -v
     - name: Check typed concurrency foundations
-      run: swiftc -I "$(swift build --show-bin-path)/Modules" -swift-version 6 -strict-concurrency=complete -warnings-as-errors -typecheck Sources/OptionalSubscripts/ValuePond.swift Sources/OptionalSubscripts/Lake.swift Sources/OptionalSubscripts/Trie.swift
+      run: swiftc -I "$(swift build --show-bin-path)" -I "$(swift build --show-bin-path)/Modules" -swift-version 6 -strict-concurrency=complete -warnings-as-errors -typecheck Sources/OptionalSubscripts/ValuePond.swift Sources/OptionalSubscripts/Lake.swift Sources/OptionalSubscripts/Trie.swift
     - name: Run tests
       run: swift test -v --parallel

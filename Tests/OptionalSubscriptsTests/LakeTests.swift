@@ -185,6 +185,33 @@ struct LakeTests {
         #expect(await counter.value == 0)
     }
 
+    @Test func cancellation_during_an_uncooperative_factory_rejects_its_result() async {
+        actor Gate {
+            let began: AsyncStream<Void>.Continuation
+            var pending: CheckedContinuation<Void, Never>?
+            init(began: AsyncStream<Void>.Continuation) { self.began = began }
+            func wait() async {
+                await withCheckedContinuation { continuation in
+                    pending = continuation
+                    began.yield(())
+                    began.finish()
+                }
+            }
+            func release() { pending?.resume(); pending = nil }
+        }
+        let (started, began) = AsyncStream<Void>.makeStream()
+        let gate = Gate(began: began)
+        let lake = Routed { _ in
+            await gate.wait()
+            return Self.values("too late")
+        }
+        let opening = Task { try await lake.stream([]) }
+        for await _ in started { break }
+        opening.cancel()
+        await gate.release()
+        await #expect(throws: CancellationError.self) { try await opening.value }
+    }
+
     @Test func independent_sources_can_open_concurrently() async throws {
         actor Rendezvous {
             var waiting: CheckedContinuation<Void, Never>?

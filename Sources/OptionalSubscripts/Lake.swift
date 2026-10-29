@@ -23,7 +23,9 @@ public struct Lake<Request: Sendable, Values: AsyncSequence & Sendable>: Sendabl
     /// original sequence directly.
     public func stream(_ request: Request) async throws -> Values {
         try Task.checkCancellation()
-        return try await open(request)
+        let values = try await open(request)
+        try Task.checkCancellation()
+        return values
     }
 }
 

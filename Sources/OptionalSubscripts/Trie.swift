@@ -129,3 +129,13 @@ public extension Trie where Key: Comparable {
         func makeIterator() -> Self { self }
     }
 }
+
+// Store notifications include ancestors and all observed descendants of a write.
+extension Trie where Key: Comparable {
+    func routes<Route: Collection>(affectedByChanging route: Route) -> [[Key]] where Route.Element == Key {
+        var paths = route.lineage.reversed().map(Array.init)
+        let subtree: Self? = self[route]
+        if let subtree { paths.append(contentsOf: subtree.depthFirstSearch().map { Array(route) + $0.path }) }
+        return paths
+    }
+}

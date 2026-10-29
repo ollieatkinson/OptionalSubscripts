@@ -152,7 +152,7 @@ public extension Optional where Wrapped == Any {
     
     enum JSONSerializationError: Error {
         case isNil
-        case notValidJSONObject(Any)
+        case notValidJSONObject(String)
     }
     
     func json(_ options: JSONSerialization.WritingOptions = [.fragmentsAllowed, .sortedKeys, .prettyPrinted]) throws -> Data {
@@ -160,7 +160,7 @@ public extension Optional where Wrapped == Any {
             throw JSONSerializationError.isNil
         }
         guard JSONSerialization.isValidJSONObject([o]) else {
-            throw JSONSerializationError.notValidJSONObject(o)
+            throw JSONSerializationError.notValidJSONObject(String(reflecting: o))
         }
         return try JSONSerialization.data(withJSONObject: o, options: options)
     }

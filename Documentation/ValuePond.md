@@ -3,10 +3,10 @@
 Reference: [ValuePond implementation and tests](https://gist.github.com/ollieatkinson/9f2748231612483e0cfd5c2cf76d44e9),
 revision `364b12981c80cda9008581cf2521de4ecdf8d7f1`.
 
-The typed target and tests require Swift 6.4 / Xcode 27 and compile in Swift 6
+The whole library and its tests require Swift 6.4 / Xcode 27 and compile in Swift 6
 language mode. Source and grace tasks explicitly enter with `@concurrent`;
-asynchronous `defer` closes test ponds before each test returns. The original
-untyped API is isolated in a Swift 5 compatibility target and re-exported.
+asynchronous `defer` closes test ponds before each test returns. Routed Geyser/Pond
+now also use Sendable payloads in the same Swift 6 module.
 
 The original tests define the timing, sharing and replay compatibility baseline.
 This typed implementation and its expanded tests were developed in Namespace

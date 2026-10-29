@@ -1,248 +1,219 @@
 # Optional Subscripts
 
-Requires Swift 6.4 / Xcode 27.
-
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://github.com/ollieatkinson/OptionalSubscripts/actions/workflows/tests.yml/badge.svg)](https://github.com/ollieatkinson/OptionalSubscripts/actions/workflows/tests.yml)
 
-All equality expressions in this document return `true`:
+Requires Swift 6.4 / Xcode 27. The whole library and its tests compile in Swift 6
+language mode. There is one library target and no compatibility target.
+
+### Synchronous optional subscripts
+
+Local `Any?` values can still be read and mutated without a schema:
+
 ```swift
 import OptionalSubscripts
 
-var 📦: Any?
-
-📦 = nil
-📦 = []
-📦 = [:]
-
-📦[] = "👋"
-try 📦[] == "👋"
-
-📦["one"] = 1
-try 📦["one"] == 1
-
-📦["one", 2] = 2
-try 📦["one", 2] == 2
-
-📦["one", 10] = nil
-try 📦["one"] as [Int?] == [nil, nil, 2]
-
-📦["one", 2] = ["three": 4]
-try 📦["one", 2, "three"] == 4
-try 📦[\.["one"][2]["three"]] == 4
-        
-📦["one", 2] = nil
-📦["one"] == nil
-
-📦["one", "two"] = nil
-📦[] == nil
-
+var value: Any?
+value["one", 2, "three"] = 4
+let number: Int = try value["one", 2, "three"]
+let same: Int = try value[\.["one"][2]["three"]]
+value["one", 2] = nil // empty branches are pruned
 ```
 
-The package includes `Any?.Store` actor with routed streams, publishers, batch updates and atomic transactions:
+Keys and integer indices remain distinct, arrays grow with nil holes, and removing
+the last value prunes empty ancestors. These synchronous helpers do not make
+arbitrary `Any` values safe to transfer between actors.
+
+### Sendable stores
+
+`ValueStore<Value: Sendable>` shares one typed value. `Dictionary.Store` requires
+Sendable keys and values and provides per-key streams and batch updates. These
+follow the [updated store implementations and examples](https://gist.github.com/ollieatkinson/9f2748231612483e0cfd5c2cf76d44e9).
+
 ```swift
-let o = Any?.Store()
-
-let stream = await o.stream("me", 2, "you").filter(String.self).prefix(3)
-
-Task {
-    var hearts: [String] = []
-    
-    for await o in stream {
-        hearts.append(o)
-    }
-    
-    hearts == ["❤️", "💛", "💚"]
-}
-
-await o.set("me", 2, "you", to: "❤️")
-await o.set("me", 2, to: ["you": "💛"])
-await o.set("me", to: [nil, nil, ["you": "💚"]])
-
+let names = [String: String].Store(["name": "Dorothy"])
+var values = await names.stream("name").makeAsyncIterator()
+await values.next() // .some(.some("Dorothy"))
+await names.set("name", to: "Witch")
 ```
 
-The package also includes `Any?.Pond` actor that turns a chunky data source (like a document-oriented database) into routed data streams of arbitrary granularity:
+`Any?.Store` retains its routed API, but its payload is now
+`SendableValue = (any Sendable)?`. `nil` is absence; `NSNull()` is a present null.
+Arbitrary statically Sendable scalars are supported. Arrays and dictionaries must
+also have Sendable elements; heterogeneous dictionaries can be typed as
+`[String: any Sendable]`.
 
-```swift 
-let db = SomeDatabase() // conforms to Geyser protocol and streams entire documents
-let pond = Any?.Pond(source: db)
-
-await db.store.set("v/2.0/way/to", "my", "heart", to: "🤍")
-
-var hearts = ""
-
-loop:
-for await heart in pond.stream("way", "to", "my", "heart").filter(String?.self) {  
-    // observing a nested field in a versioned document ↑
-    
-    hearts += heart ?? ""
-    
-    switch heart {
-    case nil   where hearts.isEmpty:
-               await db.store.set("v/1.0/way/to", "my", "heart", to: "❤️")
-    case "❤️": await db.store.set("v/1.0/way/to", "my", "heart", to: "💛")
-    case "💛": await db.store.set("v/1.0/way/to", "my", "heart", to: "💚")
-    case "💚": await db.setVersion(to: "v/2.0/")
-    case "🤍": break loop
-    default:   assertionFailure()
-    }
-}
-
-hearts == "❤️💛💚🤍"
-
-await pond.gushSources["v/1.0/way/to"]?.referenceCount == nil
-await pond.gushSources["v/2.0/way/to"]?.referenceCount == 1
-
-```
-
-... where:
 ```swift
-protocol Geyser {
+let document = Any?.Store()
+await document.set("profile", "name", to: "Dorothy")
+let name = try await document.get("profile", "name", as: String.self)
 
-    associatedtype GushID: Hashable
-    
-    associatedtype Gushes: AsyncSequence where Gushes.Element == Any?
-    
-    associatedtype GushToRouteMapping: AsyncSequence where GushToRouteMapping.Element == (id: GushID, route: Optional<Any>.Route)?
+// JSONSerialization returns Any. Convert synchronously before the actor hop.
+let snapshot = try SendableValue(jsonObject: ["name": "Dorothy", "avatar": NSNull()])
+await document.set("profile", to: snapshot)
+```
 
-    func stream(_ gush: GushID) async -> Gushes
-    
-    func source<Route>(of route: Route) async -> GushToRouteMapping where Route: Collection, Route.Index == Int, Route.Element == Optional<Any>.Location
+Batch changes notify each affected route once. Transactions use a synchronous
+actor-isolated closure, so other tasks cannot interleave as fake nested scopes.
+Do asynchronous work before entering a transaction:
+
+```swift
+await document.transaction { store in
+    store.set("profile", "name", to: "Witch")
+    store.set("profile", "active", to: true)
 }
 ```
 
-### Sharing a typed source with ValuePond
+### ValuePond shares one sequence
 
-`ValuePond` shares one nonthrowing `AsyncSequence`, replaying its latest
-value to each subscriber. It is available on macOS 15, iOS 18, tvOS 18 and watchOS 11
-or newer; the rest of the package keeps its existing deployment requirements.
+`ValuePond` shares one Sendable, nonthrowing async sequence with replay, per-consumer
+buffers, cancellation and clock-controlled grace periods:
 
 ```swift
 let store = ValueStore(42)
-let pond = ValuePond(cancellingGracePeriod: .seconds(5), source: {
+let valuePond = ValuePond(cancellingGracePeriod: .seconds(5), source: {
     await store.stream()
 })
+let answer = try await valuePond.get()
+for await value in await valuePond.stream() { print(value) }
+```
 
-let answer = try await pond.get() // 42
-for await value in await pond.stream() {
-    print(value) // replay, followed by live updates
+Pending consumers share one source. A finite source's last value stays live while
+observed. Grace expiry clears replay before a fresh source starts. Optional nil
+is replayed as a value; an empty source ends instead of hanging `get()`.
+Recoverable errors can be carried as Result/snapshot elements. See
+[ValuePond behaviour compatibility](Documentation/ValuePond.md).
+
+### Pond routes coarse Geyser documents
+
+`Any?.Pond` serves a different purpose: a `Geyser` maps fine routes to coarse
+source IDs and document roots. Several child routes share one coarse upstream,
+and each route's mapping can change over time. Both APIs coexist.
+
+```swift
+protocol Geyser: Sendable {
+    associatedtype GushID: Hashable & Sendable
+    associatedtype Gushes: AsyncSequence & Sendable
+        where Gushes.Element == SendableValue
+    associatedtype GushToRouteMapping: AsyncSequence & Sendable
+        where GushToRouteMapping.Element == (id: GushID, route: Any?.Route)?
+    func stream(_ gush: GushID) async -> Gushes
+    func source(of route: Any?.Route) async -> GushToRouteMapping
 }
 ```
 
-Pending subscribers share one source. A finite source's final value stays live
-while subscribed, and expiry after the last subscriber clears replay before the
-next source starts. Each subscriber chooses its own buffering policy. `get()`
-throws on cancellation or completion without any value; an emitted optional `nil`
-is a value and is replayed normally. Carry recoverable failures as `Result` or
-snapshot elements. `cancel()` closes subscribers, clears replay and lets the next
-subscription start afresh. A custom `Clock<Duration>` can control grace periods.
-
-The implementation and tests preserve the updated
-[original ValuePond examples](https://gist.github.com/ollieatkinson/9f2748231612483e0cfd5c2cf76d44e9).
-See [behaviour compatibility](Documentation/ValuePond.md) for the scenario mapping
-and the explicit empty-source, cancellation, buffering and generation fixes.
-The two types have different purposes and coexist. `ValuePond` owns one shared
-value source; `Any?.Pond` maps requested routes to coarser Geyser sources and
-projects their updates into fine-grained streams. Pond remains supported and its
-stale-source reference counting is fixed. Its untyped `Any?` concurrency boundary
-is retained in the compatibility target.
-
-### Composing sources with Lake
-
-`Lake<Request, Values>` routes requests to asynchronous sources. Its prefix mounts
-choose the deepest match, independently of registration order. Mounts are stored
-in an immutable trie built once at initialization; each lookup is O(route depth),
-independent of the number of sibling mounts:
+A simple editable source can use a routed Store:
 
 ```swift
-let local = [String: String].Store(["profile/name": "Dorothy"])
-let remote = [String: String].Store(["remote/profile/name": "Witch"])
+actor Documents: Geyser {
+    typealias Gushes = AsyncStream<SendableValue>
+    typealias GushToRouteMapping = AsyncStream<(id: String, route: Any?.Route)?>
+    let store = Any?.Store()
 
-typealias Documents = Lake<[String], AsyncStream<String?>>
-let lake = try Documents(mounts: [
-    .init(at: [], source: { route in
-        await local.stream(route.joined(separator: "/"))
-    }),
-    .init(at: ["remote"], source: { route in
-        await remote.stream(route.joined(separator: "/"))
-    }),
-])
+    func stream(_ id: String) async -> Gushes {
+        await store.stream(.key(id))
+    }
+    func source(of route: Any?.Route) -> GushToRouteMapping {
+        let root = Array(route.prefix(2))
+        return AsyncStream { output in
+            output.yield((root.joined(separator: "/"), root))
+            output.finish()
+        }
+    }
+}
 
-for await name in try await lake.stream(["remote", "profile", "name"]) {
-    print(name as Any) // Optional("Witch"), followed by live updates
+let database = Documents()
+let pond = Any?.Pond(source: database)
+await database.store.set("local/user", "name", to: "Dorothy")
+for try await name in pond.stream("local", "user", "name").filter(String.self) {
+    print(name)
 }
 ```
 
-An empty mount route supplies a default. Duplicate routes throw at construction;
-an unmatched request throws before any source opens. Prefixes match complete
-components (`["api"]` does not match `["apiary"]`). Sources receive the full route,
-including its mount prefix. A selected source's missing value, empty completion
-or error never falls back to another mount.
+Routed streams now throw mapping/source failures: use `for try await`. Missing or
+invalid mappings fail promptly, empty mapping/gush sequences complete, and each
+consumer has its own buffer and cancellation lease. A same-ID projection change
+reuses the upstream; remapping one observer never cancels another's document.
 
-Lakes nest using the same source closure:
+**`pond.store` is now an inspectable cache, not an observation bus.** Editing that
+cache no longer emits into `pond.stream`. Live edits go through the Geyser's
+backing source, as in `database.store` above. Read-only providers can be composed
+with application-owned preview/overlay sources instead. Cache revisions reject
+obsolete writes after remapping and cancellation; metadata belongs to the Pond,
+not a longer-lived injected Store.
+
+### Lake composes sources through a Trie
+
+Lake can directly mount routed Ponds, ValuePond streams, typed stores or other
+Lakes. It returns the selected sequence directly, without a forwarding task,
+actor, cache or extra buffer:
 
 ```swift
-let outer = try Documents(mounts: [
-    .init(at: ["remote"], source: { try await lake.stream($0) }),
+let local = Any?.Pond(source: Documents())
+let remote = Any?.Pond(source: Documents())
+typealias Routed = Any?.Pond<Documents>
+let lake = try Lake<Any?.Route, Routed.Stream>(mounts: [
+    .init(at: ["local"], source: { local.stream($0) }),
+    .init(at: ["remote"], source: { remote.stream($0) }),
 ])
+for try await value in try await lake.stream(["local", "user", "name"]) {
+    print(value as Any)
+}
 ```
 
-`Any?.Route` (including key and index components) can also be used directly as
-the request. A request can carry more than its route. Use `init(mounts:route:)`
-to extract the routing components while preserving the original request for the selected source.
-Use `init(stream:)` for custom selection, such as semantic inheritance or
-ambiguity checks, and delegate to the chosen source's `stream` method.
+The immutable mount trie is built once. Deepest-prefix lookup is O(route depth),
+independent of sibling count or registration order. An empty route is a default;
+duplicate or unmounted routes throw. Prefixes match complete keys/indices. A
+selected source's absence, completion or error never causes fallback.
 
-Lake returns the original sequence directly. It creates no forwarding task, actor,
-buffer, replay cache or subscription registry. Sharing, pending/error values,
-backpressure, grace periods and cancellation belong to the source. Reuse the same
-ValuePond instance in a source closure to preserve that ValuePond's sharing across requests;
-constructing a new ValuePond per request would create independent upstream work. The
-Lake itself may be released while its returned sequence is being observed.
+Sources receive the full request, including mount prefixes. `init(mounts:route:)`
+can extract a path from a richer Sendable request without losing entity context.
+`init(stream:)` supports application-defined selection such as semantic type
+policy. Reuse source instances to preserve their sharing. Cancellation is checked
+before and after opening a source.
 
-Requests, sequences and elements must be `Sendable`, and source closures are
-`@Sendable`. This typed API can compose a modern `ValuePond`'s streams without
-changing their lifetime. The older `Any?.Pond` above emits non-`Sendable` `Any?`
-through its legacy sequence; it is **not directly compatible** with this Lake.
-Use a typed `ValuePond` for new composition. Lake uses the public `Trie` below,
-backed by Swift Collections’ `OrderedDictionary`. The `OptionalSubscripts` target
-and its tests use Swift 6 language
-mode with complete concurrency checking. They use explicit `@concurrent` task
-entry and Swift 6.4 asynchronous `defer` for deterministic test cleanup.
-
-The untyped stores, route-based Pond and Combine bridges are retained in the
-`OptionalSubscriptsLegacy` compatibility target in Swift 5 mode. Unconstrained
-legacy values cannot safely satisfy Swift 6's actor-to-stream transfer checks;
-this separation preserves their existing source API without weakening the typed
-core. `import OptionalSubscripts` continues to expose those APIs through a
-re-export. Existing Hope/XCTest coverage remains in a separate legacy test target.
-`swift-clocks` is a test-only dependency for deterministic grace periods;
-production code uses the standard `Clock`. CI requires the `xcode-27` runner and
-checks the installed Swift 6.4 toolchain.
-
-### A path-indexed Trie
-
-The public `Trie<Key, Value>` follows the [original Trie API](https://gist.github.com/ollieatkinson/6c11013dca11d6570112ef08f70f5a8b),
-using insertion-ordered branches from Swift Collections:
+The public `Trie<Key, Value>` follows the
+[original path-indexed Trie API](https://gist.github.com/ollieatkinson/6c11013dca11d6570112ef08f70f5a8b)
+with insertion-ordered branches from Swift Collections. It also underpins Store
+route notifications:
 
 ```swift
 var trie = Trie<String, Int>(value: 0)
 trie[["api", "programme"]] = 42
-let value: Int? = trie[["api", "programme"]] // 42
+let value: Int? = trie[["api", "programme"]]
 let subtree: Trie<String, Int>? = trie[["api"]]
-let fallback = trie.deepestValue(along: ["api", "programme", "title"]) // 42
-trie[["api", "other"], inserting: 10] += 1
+let fallback = trie.deepestValue(along: ["api", "programme", "title"])
 ```
 
-The empty path addresses the root. Value assignment changes only that node's
-value, preserving descendants; subtree assignment replaces its whole branch,
-and assigning a nil subtree removes it. Optional nil values remain distinct
-from absent values. `depthFirstSearch()` visits parents before descendants with
-sorted siblings; `sorted: false` preserves sibling insertion order. Construction
-uses modifying dictionary subscripts. Lake captures a completed immutable trie
-for O(path-depth) source selection. Sendable conformance is conditional on the
-keys and values; ordinary local tries need no concurrency constraints.
+Value assignment preserves descendants; subtree assignment replaces/removes the
+branch. Optional nil is distinct from absence. Depth-first search visits parents
+before descendants, with sorted or insertion-order siblings. Sendable conformance
+is conditional on keys and values.
 
-And a bunch of other (hopefully) useful new API.
+### Observing async sequences and Combine
 
-(Decent documentation and an overall statement of purpose is forthcoming 😜)
+For general concurrent code, native async operators and a task-owned `sink` accept
+Sendable async handlers. Keep the returned observation alive; cancelling or
+releasing it cancels its task:
+
+```swift
+let observation = await names.stream("name").filter(String.self).sink { name in
+    print(name)
+}
+observation.cancel()
+await observation.wait()
+```
+
+Real Combine interop remains available through `.publisher()`, using Swift 6.4
+MainActor-isolated `Publisher`/`Subscription` conformances. Build and use those
+publishers on MainActor; subscriber delivery, demand and cancellation stay there.
+Sequence failure types are preserved. Standard Combine operators, `sink` and
+`eraseToAnyPublisher()` work in that actor context. Arbitrary non-Sendable
+subscribers are never transferred into background tasks. Stores and source
+factories remain concurrent; only this UI-facing adapter is MainActor-bound.
+
+The base deployment floors are macOS 12 / iOS 15. ValuePond, routed Pond and the
+isolated Combine adapter require macOS 15 / iOS 18 equivalents. See the
+[Swift 6 migration guide](Documentation/Swift6Migration.md) for API changes and
+behaviour-test mapping. CI uses `xcode-27` and checks the whole module and all tests
+with complete concurrency checking and warnings as errors.

@@ -11,7 +11,7 @@ public extension AsyncSequence {
     @inlinable func cast<A>(to: A.Type = A.self) -> AsyncThrowingMapSequence<Self, A> {
         map { o in
             guard let a = o as? A else {
-                throw CastingError(value: self, to: A.self)
+                throw CastingError(value: o, to: A.self)
             }
             return a
         }

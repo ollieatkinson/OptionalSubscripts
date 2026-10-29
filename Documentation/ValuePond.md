@@ -3,10 +3,11 @@
 Reference: [ValuePond implementation and tests](https://gist.github.com/ollieatkinson/9f2748231612483e0cfd5c2cf76d44e9),
 revision `364b12981c80cda9008581cf2521de4ecdf8d7f1`.
 
-The original tests cover usage over time more thoroughly than the initial
-OptionalSubscripts suite. Their behaviour is the compatibility baseline. OptionalSubscripts keeps
-snake_case test names and Swift Testing, using explicit source-start signals and
-TestClock rather than XCTest expectations or a global serial-executor override.
+The original tests define the timing, sharing and replay compatibility baseline.
+This typed implementation and its expanded tests were developed in Namespace
+before moving here. The suite uses snake_case names and Swift Testing, with
+explicit source-start signals and TestClock rather than XCTest expectations or a
+global serial-executor override.
 
 | Original scenario | OptionalSubscripts coverage |
 | --- | --- |
@@ -20,13 +21,13 @@ TestClock rather than XCTest expectations or a global serial-executor override.
 | Do not cancel before a five-second grace period | `cancellation_waits_for_the_full_grace_period`, with get and stream cases |
 | Keep upstream alive while one of several consumers remains | Multiple-cancellation test: ten subscribers reduced to one, then zero |
 
-## Corrected semantic difference
+## Finite-source retention
 
-The first OptionalSubscripts adaptation closed subscribers when upstream completed. The
-original Pond retains subscribers and the final value until they leave. OptionalSubscripts
-now preserves that contract: an active subscriber prevents cache expiry even
-after a finite source has produced its last value. A test advances four grace
-periods while that subscriber remains and verifies the value is still shared.
+The original Pond retains subscribers and the final value until they leave.
+This implementation preserves that contract: an active subscriber prevents cache
+expiry even after a finite source has produced its last value. A test advances
+four grace periods while that subscriber remains and verifies the value is still
+shared.
 
 ## Explicit extensions
 

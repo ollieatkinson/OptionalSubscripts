@@ -4,6 +4,48 @@ import Testing
 
 @Suite(.timeLimit(.minutes(1))) struct RoutedPondTests {
     @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
+    @Test func replay_populates_a_new_cache_mount_after_the_source_finishes() async throws {
+        let source = RoutedSource()
+        let pond = Any?.Pond(source: source)
+        defer { await pond.cancel() }
+        let first: Any?.Route = ["first", "name"]
+        var values = pond.stream(first).makeAsyncIterator()
+        try await routedWait { await source.mappingCount == 1 }
+        await source.map(first, to: "document", at: ["first"])
+        try await routedWait { await source.starts["document"] == 1 }
+        await source.send("document", value: ["name": "Cached"])
+        #expect(try await values.next() as? String == "Cached")
+        try await routedWait { (try? await pond.store.get("first", "name", as: String.self)) == "Cached" }
+        await source.finish("document")
+        let second: Any?.Route = ["second", "name"]
+        var replay = pond.stream(second).makeAsyncIterator()
+        try await routedWait { await source.mappingCount == 2 }
+        await source.map(second, to: "document", at: ["second"])
+        #expect(try await replay.next() as? String == "Cached")
+        try await routedWait { (try? await pond.store.get("second", "name", as: String.self)) == "Cached" }
+        #expect(await source.starts["document"] == 1)
+    }
+
+    @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
+    @Test func same_id_projection_changes_populate_the_new_cache_mount() async throws {
+        let source = RoutedSource()
+        let pond = Any?.Pond(source: source)
+        defer { await pond.cancel() }
+        let route: Any?.Route = ["doc", "child", "value"]
+        var values = pond.stream(route).makeAsyncIterator()
+        try await routedWait { await source.mappingCount == 1 }
+        await source.map(route, to: "document", at: ["doc"])
+        try await routedWait { await source.starts["document"] == 1 }
+        await source.send("document", value: ["value": "new", "child": ["value": "old"]])
+        #expect(try await values.next() as? String == "old")
+        try await routedWait { (try? await pond.store.get("doc", "child", "value", as: String.self)) == "old" }
+        await source.map(route, to: "document", at: ["doc", "child"])
+        #expect(try await values.next() as? String == "new")
+        try await routedWait { (try? await pond.store.get("doc", "child", "value", as: String.self)) == "new" }
+        #expect(await source.starts["document"] == 1)
+    }
+
+    @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
     @Test func distinct_child_routes_share_one_coarse_source_and_cancel_independently() async throws {
         let source = RoutedSource()
         let pond = Any?.Pond(source: source)
@@ -340,14 +382,16 @@ import Testing
         try await routedWait { await source.starts["new"] == 1 }
         await source.map(a, to: "old", at: ["doc"])
         try await routedWait { await pond.gushSources["old"]?.referenceCount == 2 }
-        // The same-ID return invalidates the older pending cache revision,
-        // even though there has been no new source snapshot.
+        // Remounting replays the document into the cache under the new revision.
+        try await routedWait { (try? await store.get("doc", "a", as: String.self)) == "stale" }
+        await store.set("doc", "a", to: "remounted")
+        // The older pending batch must not overwrite this newer mount.
         await pond.setCacheWriteBarrier { await nextGate.wait() }
         await source.send("old", value: ["a": "next", "b": "next"])
         await gate.release()
         var next = nextGate.entered.makeAsyncIterator()
         _ = await next.next()
-        #expect(try await store.get("doc", "a", as: String.self) == "baseline")
+        #expect(try await store.get("doc", "a", as: String.self) == "remounted")
         #expect(await source.starts["old"] == 1)
         await pond.setCacheWriteBarrier(nil)
         await nextGate.release()

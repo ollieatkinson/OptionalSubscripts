@@ -138,7 +138,7 @@ public extension Optional where Wrapped == Any {
             subscriptions[id] = Subscription(route: route, output: output)
         }
 
-        private func remap(_ id: UUID, to mapping: (id: Source.GushID, route: Route)?) throws {
+        private func remap(_ id: UUID, to mapping: (id: Source.GushID, route: Route)?) async throws {
             guard var subscription = subscriptions[id] else { return }
             guard let mapping else { throw RoutingError.unmounted(subscription.route) }
             guard subscription.route.starts(with: mapping.route) else { throw RoutingError.invalidMapping(mapping.route) }
@@ -155,10 +155,11 @@ public extension Optional where Wrapped == Any {
             // Changing a projection on the same document must not restart its
             // upstream, even when this is its only observer and grace is zero.
             if let previous, previous.id == mapping.id {
+                cacheRevisions.invalidate(affectedRoutes, revision: mappingRevision)
                 if case .value(let value) = entries[mapping.id]?.replay {
                     subscription.output.yield(value[subscription.route.dropFirst(mapping.route.count)])
+                    await store.cache([(mapping.route, value)], revisions: cacheRevisions, revision: mappingRevision)
                 }
-                cacheRevisions.invalidate(affectedRoutes, revision: mappingRevision)
                 return
             }
             if let previous { release(id, from: previous.id) }
@@ -171,10 +172,11 @@ public extension Optional where Wrapped == Any {
             entries[mapping.id]?.grace = nil
             entries[mapping.id]?.lease &+= 1
             entries[mapping.id]?.observers.insert(id)
+            cacheRevisions.invalidate(affectedRoutes, revision: mappingRevision)
             if case .value(let value) = entries[mapping.id]?.replay {
                 subscription.output.yield(value[subscription.route.dropFirst(mapping.route.count)])
+                await store.cache([(mapping.route, value)], revisions: cacheRevisions, revision: mappingRevision)
             }
-            cacheRevisions.invalidate(affectedRoutes, revision: mappingRevision)
         }
 
         // A gate allows lifecycle tests to hold a pending cache hop while a

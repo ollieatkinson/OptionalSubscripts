@@ -22,7 +22,11 @@ final class CacheRevisions: Sendable {
     func commit(_ updates: Any?.Store.BatchUpdates, revision: UInt64, body: (Any?.Store.BatchUpdates) -> Void) {
         state.withLock { state in
             guard !state.closed else { return }
-            let fresh = updates.filter { revision >= (state.routes[$0.0] ?? 0) }
+            let fresh = updates.filter { route, _ in
+                !state.routes.contains { other, latest in
+                    latest > revision && (route.starts(with: other) || other.starts(with: route))
+                }
+            }
             for (route, _) in fresh { state.routes[route] = revision }
             // Invalidation and a non-suspending Store commit share one critical
             // section, so a queued old write cannot race past a remap or close.

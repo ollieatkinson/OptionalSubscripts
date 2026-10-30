@@ -141,6 +141,7 @@ private extension Dictionary.Store {
 
     func remove(continuation id: ID, for key: Key) {
         subscriptions[key]?[id] = nil
+        if subscriptions[key]?.isEmpty == true { subscriptions[key] = nil }
     }
 }
 

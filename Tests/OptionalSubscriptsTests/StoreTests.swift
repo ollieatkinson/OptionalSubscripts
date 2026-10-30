@@ -3,6 +3,52 @@ import Foundation
 import Testing
 
 @Suite(.timeLimit(.minutes(1))) struct StoreTests {
+    @Test func cancelling_dictionary_observers_releases_their_keys() async throws {
+        let store = [String: Int].Store()
+        var observers: [Task<Void, Never>] = []
+        for key in 0..<100 {
+            let stream = await store.stream(String(key))
+            observers.append(Task { for await _ in stream {} })
+        }
+        #expect(await store.subscriptions.count == 100)
+        for task in observers { task.cancel() }
+        for task in observers { await task.value }
+        while !(await store.subscriptions.values.allSatisfy(\.isEmpty)) {
+            try Task.checkCancellation()
+            await Task.yield()
+        }
+        #expect(await store.subscriptions.isEmpty)
+    }
+
+    @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
+    @Test func newer_child_writes_reject_an_older_parent_without_losing_disjoint_updates() async throws {
+        let store = Any?.Store()
+        let revisions = CacheRevisions()
+        await store.cache([(["doc", "child"], "new")], revisions: revisions, revision: 2)
+        await store.cache([(["doc"], ["child": "old"]), (["other"], "safe")], revisions: revisions, revision: 1)
+        #expect(try await store.get("doc", "child", as: String.self) == "new")
+        #expect(try await store.get("other", as: String.self) == "safe")
+    }
+
+    @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
+    @Test func newer_parent_writes_reject_an_older_child() async throws {
+        let store = Any?.Store()
+        let revisions = CacheRevisions()
+        await store.cache([(["doc"], ["child": "new"])], revisions: revisions, revision: 2)
+        await store.cache([(["doc", "child"], "old")], revisions: revisions, revision: 1)
+        #expect(try await store.get("doc", "child", as: String.self) == "new")
+    }
+
+    @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
+    @Test(arguments: [([String](), ["doc"]), (["doc"], []), (["doc"], ["doc", "child"]), (["doc", "child"], ["doc"])])
+    func invalidations_reject_overlapping_routes(routes: ([String], [String])) {
+        let revisions = CacheRevisions()
+        revisions.invalidate([routes.0.map(Any?.Location.key)], revision: 2)
+        var committed = false
+        revisions.commit([(routes.1.map(Any?.Location.key), "old")], revision: 1) { committed = !$0.isEmpty }
+        #expect(!committed)
+    }
+
     @Test func typed_value_store_replays_mutates_notifies_and_compares_identity() async {
         let store = ValueStore("pizza")
         var values = await store.stream().makeAsyncIterator()

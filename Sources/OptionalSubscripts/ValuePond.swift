@@ -4,11 +4,10 @@ import Foundation
 ///
 /// Adapted from Oliver Atkinson's ValuePond:
 /// https://gist.github.com/ollieatkinson/9f2748231612483e0cfd5c2cf76d44e9
-/// Behaviour checked against revision 364b12981c80cda9008581cf2521de4ecdf8d7f1.
 ///
 /// Subscription starts when `stream` or `get` is called. The source stays alive
 /// while observed and for the grace period afterwards. A completed source's last
-/// value remains live while subscribed, matching the original ValuePond. Expiry clears replay;
+/// value remains live while subscribed. Expiry clears replay;
 /// the next subscriber starts a fresh source. Errors can be carried as Result or
 /// snapshot values, keeping recoverable failures inside the stream.
 @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)

@@ -22,3 +22,7 @@ jobs:
       run: swift build -v -Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors
     - name: Run all tests with strict concurrency
       run: swift test -v --parallel -Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors
+    - name: Compare Tree and Trie in release mode
+      env:
+        TREE_BENCHMARK: "1"
+      run: swift test -c release --filter TreeBenchmarks

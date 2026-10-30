@@ -36,7 +36,8 @@ import Testing
         try await routedWait { await source.mappingCount == 1 }
         await source.map(route, to: "document", at: ["doc"])
         try await routedWait { await source.starts["document"] == 1 }
-        await source.send("document", value: ["value": "new", "child": ["value": "old"]])
+        let document: [String: any Sendable] = ["value": "new", "child": ["value": "old"]]
+        await source.send("document", value: document)
         #expect(try await values.next() as? String == "old")
         try await routedWait { (try? await pond.store.get("doc", "child", "value", as: String.self)) == "old" }
         await source.map(route, to: "document", at: ["doc", "child"])

@@ -15,7 +15,7 @@ extension Collection {
 
 public extension BidirectionalCollection {
 
-    func get<Key: Hashable, Value>(_ key: Key) throws -> Value where Element == (Key, Value?)  {
+    func get<Key: Hashable & Sendable, Value: Sendable>(_ key: Key) throws -> Value where Element == (Key, Value?)  {
         guard let o = last(where: { $0.0 == key })?.1 else {
             throw [Key: Value].Store.Error.nilAt(key: key)
         }

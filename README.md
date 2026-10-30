@@ -1,113 +1,116 @@
 # Optional Subscripts
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://github.com/screensailor/OptionalSubscripts/actions/workflows/tests.yml/badge.svg)](https://github.com/screensailor/OptionalSubscripts/actions/workflows/tests.yml)
 
-All equality expressions in this document return `true`:
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Tests](https://github.com/ollieatkinson/OptionalSubscripts/actions/workflows/tests.yml/badge.svg)](https://github.com/ollieatkinson/OptionalSubscripts/actions/workflows/tests.yml)
+
+Read and write nested optional values, observe stores, and share asynchronous sources.
+
+Requires Swift 6.4, macOS 12 or iOS 15. Pond and ValuePond require macOS 15 or iOS 18.
+
+## Optional subscripts
+
 ```swift
 import OptionalSubscripts
 
-var 📦: Any?
-
-📦 = nil
-📦 = []
-📦 = [:]
-
-📦[] = "👋"
-try 📦[] == "👋"
-
-📦["one"] = 1
-try 📦["one"] == 1
-
-📦["one", 2] = 2
-try 📦["one", 2] == 2
-
-📦["one", 10] = nil
-try 📦["one"] as [Int?] == [nil, nil, 2]
-
-📦["one", 2] = ["three": 4]
-try 📦["one", 2, "three"] == 4
-try 📦[\.["one"][2]["three"]] == 4
-        
-📦["one", 2] = nil
-📦["one"] == nil
-
-📦["one", "two"] = nil
-📦[] == nil
-
+var value: Any?
+value["one", 2, "three"] = 4
+let number: Int = try value["one", 2, "three"]
+let same: Int = try value[\.["one"][2]["three"]]
+value["one", 2] = nil
 ```
 
-The package includes `Any?.Store` actor with routed streams, publishers, batch updates and atomic transactions:
+Arrays grow with nil holes. Removing the last value prunes empty branches.
+
+## Stores
+
+`ValueStore` holds one Sendable value. `Dictionary.Store` provides per-key streams:
+
 ```swift
-let o = Any?.Store()
-
-let stream = await o.stream("me", 2, "you").filter(String.self).prefix(3)
-
-Task {
-    var hearts: [String] = []
-    
-    for await o in stream {
-        hearts.append(o)
-    }
-    
-    hearts == ["❤️", "💛", "💚"]
-}
-
-await o.set("me", 2, "you", to: "❤️")
-await o.set("me", 2, to: ["you": "💛"])
-await o.set("me", to: [nil, nil, ["you": "💚"]])
-
+let names = [String: String].Store(["name": "Dorothy"])
+var values = await names.stream("name").makeAsyncIterator()
+await values.next() // .some(.some("Dorothy"))
+await names.set("name", to: "Witch")
 ```
 
-The package also includes `Any?.Pond` actor that turns a chunky data source (like a document-oriented database) into routed data streams of arbitrary granularity:
+`Any?.Store` observes nested paths. Its payload is `SendableValue = (any Sendable)?`;
+`nil` means absence and `NSNull()` represents an explicit null.
 
-```swift 
-let db = SomeDatabase() // conforms to Geyser protocol and streams entire documents
-let pond = Any?.Pond(source: db)
-
-await db.store.set("v/2.0/way/to", "my", "heart", to: "🤍")
-
-var hearts = ""
-
-loop:
-for await heart in pond.stream("way", "to", "my", "heart").filter(String?.self) {  
-    // observing a nested field in a versioned document ↑
-    
-    hearts += heart ?? ""
-    
-    switch heart {
-    case nil   where hearts.isEmpty:
-               await db.store.set("v/1.0/way/to", "my", "heart", to: "❤️")
-    case "❤️": await db.store.set("v/1.0/way/to", "my", "heart", to: "💛")
-    case "💛": await db.store.set("v/1.0/way/to", "my", "heart", to: "💚")
-    case "💚": await db.setVersion(to: "v/2.0/")
-    case "🤍": break loop
-    default:   assertionFailure()
-    }
-}
-
-hearts == "❤️💛💚🤍"
-
-await pond.gushSources["v/1.0/way/to"]?.referenceCount == nil
-await pond.gushSources["v/2.0/way/to"]?.referenceCount == 1
-
-```
-
-... where:
 ```swift
-protocol Geyser {
+let document = Any?.Store()
+await document.set("profile", "name", to: "Dorothy")
+let name = try await document.get("profile", "name", as: String.self)
 
-    associatedtype GushID: Hashable
-    
-    associatedtype Gushes: AsyncSequence where Gushes.Element == Any?
-    
-    associatedtype GushToRouteMapping: AsyncSequence where GushToRouteMapping.Element == (id: GushID, route: Optional<Any>.Route)?
-
-    func stream(_ gush: GushID) async -> Gushes
-    
-    func source<Route>(of route: Route) async -> GushToRouteMapping where Route: Collection, Route.Index == Int, Route.Element == Optional<Any>.Location
+await document.transaction { store in
+    store.set("profile", "name", to: "Witch")
+    store.set("profile", "active", to: true)
 }
 ```
 
-And a bunch of other (hopefully) useful new API.
+Streams replay the current value. A batch emits one final snapshot per affected
+route. Transactions stage writes until the outer commit; reads inside them see
+committed values. Do asynchronous work before entering the transaction.
 
-(Decent documentation and an overall statement of purpose is forthcoming 😜)
+Use `SendableValue(jsonObject:)` to convert JSONSerialization output before passing
+it to a store.
+
+## Sharing streams
+
+`ValuePond` shares a nonthrowing async sequence and replays its latest value:
+
+```swift
+let store = ValueStore(42)
+let pond = ValuePond(cancellingGracePeriod: .seconds(5), source: {
+    await store.stream()
+})
+let answer = try await pond.get()
+for await value in await pond.stream() { print(value) }
+```
+
+The source stays alive while observed and for the grace period afterwards.
+Expiry clears the cached value; the next subscriber starts a fresh source.
+
+`Any?.Pond` uses a [Geyser](Sources/OptionalSubscripts/Geyser.swift) to map paths to
+shared document sources. Iterate its streams with `for try await` to handle
+mapping and source errors. Write through the Geyser's backing source for live
+updates; `pond.store` is an inspectable cache, and edits there do not emit values.
+
+## Routing sources
+
+`Lake` selects a source by its deepest matching route prefix:
+
+```swift
+let local = Any?.Pond(source: Documents())
+let remote = Any?.Pond(source: Documents())
+typealias Routed = Any?.Pond<Documents>
+let lake = try Lake<Any?.Route, Routed.Stream>(mounts: [
+    .init(at: ["local"], source: { local.stream($0) }),
+    .init(at: ["remote"], source: { remote.stream($0) }),
+])
+```
+
+Here, `Documents` is your Geyser implementation. Open a route with
+`try await lake.stream(["local", "user", "name"])`. Sources receive the full path,
+including the mount prefix. An empty mount is a default; duplicate or unmounted
+routes throw. A selected source's completion or failure does not try another mount.
+
+`Trie` stores values by path and supports deepest-prefix lookup:
+
+```swift
+var trie = Trie<String, Int>(value: 0)
+trie[["api", "programme"]] = 42
+let value: Int? = trie[["api", "programme"]]
+let fallback = trie.deepestValue(along: ["api", "programme", "title"])
+```
+
+## Observing values
+
+Use async sequence operators before `sink`. Retain the observation while needed;
+releasing or cancelling it cancels its task.
+
+```swift
+let observation = await names.stream("name").filter(String.self).sink { name in
+    print(name)
+}
+observation.cancel()
+await observation.wait()
+```

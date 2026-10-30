@@ -1,16 +1,10 @@
-//
-// github.com/screensailor 2021
-//
-
-public protocol Geyser {
-
-    associatedtype GushID: Hashable
-    
-    associatedtype Gushes: AsyncSequence where Gushes.Element == Any?
-    
-    associatedtype GushToRouteMapping: AsyncSequence where GushToRouteMapping.Element == (id: GushID, route: Optional<Any>.Route)?
+/// A coarse document source plus a live mapping from fine routes to documents.
+public protocol Geyser: Sendable {
+    associatedtype GushID: Hashable & Sendable
+    associatedtype Gushes: AsyncSequence & Sendable where Gushes.Element == SendableValue
+    associatedtype GushToRouteMapping: AsyncSequence & Sendable
+        where GushToRouteMapping.Element == (id: GushID, route: Any?.Route)?
 
     func stream(_ gush: GushID) async -> Gushes
-    
-    func source<Route>(of route: Route) async -> GushToRouteMapping where Route: Collection, Route.Index == Int, Route.Element == Optional<Any>.Location
+    func source(of route: Any?.Route) async -> GushToRouteMapping
 }

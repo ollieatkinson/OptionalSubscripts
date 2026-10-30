@@ -22,12 +22,12 @@ public extension Castable {
 
 public struct CastingError: Error {
     
-    public let value: Any?
+    public let value: String
     public let from: Any.Type
     public let to: Any.Type
     
     public init<A>(value: Any?, to: A.Type) {
-        self.value = value
+        self.value = String(reflecting: value)
         self.from = type(of: value)
         self.to = A.self
     }

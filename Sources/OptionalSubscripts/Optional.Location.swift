@@ -6,7 +6,7 @@ public extension Optional where Wrapped == Any {
     
     typealias Route = [Location]
 
-    enum Location {
+    enum Location: Sendable {
         case index(Int)
         case key(String)
     }

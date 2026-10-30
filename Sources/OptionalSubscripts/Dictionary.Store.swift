@@ -23,7 +23,7 @@ public extension Dictionary where Key: Sendable, Value: Sendable {
     /// await store.transaction { store in
     ///   store.set("x", to: 1)
     ///   store.set("y", to: 2)
-    ///   await store.transaction { store in
+    ///   store.transaction { store in
     ///     store.set("x", to: 3)
     ///     store.set("y", to: 4)
     ///   }
@@ -41,7 +41,22 @@ public extension Dictionary where Key: Sendable, Value: Sendable {
     actor Store {
         public typealias TransactionLevel = UInt
 
-        public var dictionary: Dictionary
+        private var storedDictionary: Dictionary
+
+        public var dictionary: Dictionary {
+            get { storedDictionary }
+            set {
+                // A replacement also removes keys introduced by earlier staged
+                // writes, even though they are not in the committed dictionary.
+                var keys = Set(storedDictionary.keys).union(newValue.keys)
+                for updates in transactionUpdates.values {
+                    keys.formUnion(updates.map { $0.0 })
+                }
+                var updates = BatchUpdate()
+                for key in keys { updates.set(key, to: newValue[key]) }
+                batch(updates)
+            }
+        }
 
         typealias ID = UInt
         typealias Subject = [ID: AsyncStream<Value?>.Continuation]
@@ -56,7 +71,7 @@ public extension Dictionary where Key: Sendable, Value: Sendable {
         ///
         /// - Parameter initialValue: The initial value to be stored in the `Dictionary.Store`.
         public init(_ initialValue: Dictionary = [:]) {
-            self.dictionary = initialValue
+            self.storedDictionary = initialValue
         }
     }
 }
@@ -168,10 +183,14 @@ public extension Dictionary.Store {
     ///
     /// - Complexity: O(n), where n is the number of key-value pairs in the `updates` dictionary.
     func batch(_ updates: BatchUpdate) {
+        guard transactionLevel == 0 else {
+            transactionUpdates[transactionLevel, default: []].append(contentsOf: updates)
+            return
+        }
         var array: [Key] = []
         var set: Set<Key> = []
         for (key, value) in updates {
-            dictionary[key] = value
+            storedDictionary[key] = value
             if set.insert(key).inserted {
                 array.append(key)
             }
@@ -213,7 +232,7 @@ public extension Dictionary.Store {
         guard transactionLevel == 0 else {
             return transactionUpdates[transactionLevel, default: []].set(key, to: newValue)
         }
-        dictionary[key] = newValue
+        storedDictionary[key] = newValue
         if let subscription = subscriptions[key] {
             for subject in subscription.values {
                 subject.yield(newValue)

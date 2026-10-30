@@ -28,6 +28,13 @@ inside. Nested transactions and rollback still work. Suspended work must happen
 before entering the transaction, so unrelated concurrent tasks cannot become
 fake nested levels or have their writes rolled back by another task.
 
+`batch` joins an enclosing transaction instead of committing early. Root replacement
+through routed `data` or typed `dictionary` also stages and notifies normally. Deep writes
+notify root observers as well as the affected ancestors/descendants, and each
+route receives only the final snapshot of a batch.
+Reads inside a transaction continue to return committed values until the outer
+transaction succeeds; the transaction stages writes rather than exposing a draft.
+
 ## Routed Geyser/Pond
 
 Geyser's source lookup accepts the canonical `Any?.Route` array. Sources and both
@@ -70,7 +77,7 @@ empty XCTest method are not recreated as runtime parity assertions.
 | Tree value deletion, subtree replacement and traversal | OptionalTests over public Trie; TrieTests cover the full supplied API |
 | ValueStore initialization, updates, inout notifications and identity | StoreTests, following the updated gist tests |
 | Dictionary streaming, batching, nested levels and rollback | StoreTests; concurrent transaction entry is also checked |
-| Routed Store fine/upstream/downstream updates, batches and concurrent writers | StoreTests, including mixed ancestor/child writes and many concurrent observations |
+| Routed Store fine/upstream/downstream updates, batches and concurrent writers | StoreTests, including root/deep notifications, whole-root replacement, nested batch rollback, mixed ancestor/child writes and many concurrent observations |
 | Observation callbacks and batch results | StoreTests native sink; AsyncObservationTests owner release, cancellation and source failures |
 | Pond version changes, nested fields and reference counts | RoutedPondTests, including partial remaps and return to reused IDs |
 | Real writable database updates shared by fine observers | RoutedPondTests Store-backed Geyser; cache-only writes are explicitly excluded |

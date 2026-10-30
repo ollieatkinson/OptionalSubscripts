@@ -104,6 +104,83 @@ import Testing
         await #expect(throws: Any?.Store.Error.self) { try await store.get("x", as: String.self) }
     }
 
+    @Test func deep_edits_and_root_replacements_publish_one_coherent_snapshot() async throws {
+        let initial: [String: any Sendable] = ["profile": ["name": "Old"], "other": true]
+        let store = Any?.Store(initial)
+        let root = await store.stream([], bufferingPolicy: .unbounded)
+        let history = Task { () throws -> [String] in
+            var snapshots: [String] = []
+            for await value in root {
+                if value as? String == "finished" { break }
+                snapshots.append(try value.json(.sortedKeys).string())
+            }
+            return snapshots
+        }
+        await store.set("profile", "name", to: "New")
+        await store.batch([(["profile", "name"], "Final"), (["other"], false)])
+        await store.transaction { store in store.data = ["replacement": true] }
+        await store.set([], to: ["direct": true])
+        await store.set([], to: "finished")
+        #expect(try await history.value == [
+            "{\"other\":true,\"profile\":{\"name\":\"Old\"}}",
+            "{\"other\":true,\"profile\":{\"name\":\"New\"}}",
+            "{\"other\":false,\"profile\":{\"name\":\"Final\"}}",
+            "{\"replacement\":true}",
+            "{\"direct\":true}",
+        ])
+    }
+
+    @Test func routed_batches_and_root_replacements_obey_transaction_rollback() async throws {
+        let store = Any?.Store(["profile": ["name": "Original"]])
+        var values = await store.stream("profile", "name", bufferingPolicy: .unbounded).makeAsyncIterator()
+        #expect(await values.next() as? String == "Original")
+        await store.transaction { store in
+            store.batch([(["profile", "name"], "First")])
+            do {
+                try store.transaction { store in
+                    store.data = ["profile": ["name": "Rolled back"]]
+                    store.batch([(["lost"], true)])
+                    throw TestFailure.rollback
+                }
+            } catch {}
+            store.set("profile", "name", to: "Final")
+        }
+        #expect(await values.next() as? String == "Final")
+        do {
+            try await store.transaction { store in
+                store.batch([(["profile", "name"], "Discarded")])
+                store.data = ["lost": true]
+                throw TestFailure.rollback
+            }
+        } catch {}
+        #expect(try await store.get("profile", "name", as: String.self) == "Final")
+        await #expect(throws: Any?.Store.Error.self) { try await store.get("lost", as: Bool.self) }
+        await store.set("profile", "name", to: "After rollback")
+        #expect(await values.next() as? String == "After rollback")
+    }
+
+    @Test func dictionary_batches_obey_enclosing_transactions() async throws {
+        let store = [String: Int].Store(["x": 0])
+        var values = await store.stream("x", bufferingPolicy: .unbounded).makeAsyncIterator()
+        #expect(await values.next() == 0)
+        await store.transaction { store in
+            store.batch([("x", 1), ("discarded", 99)])
+            store.dictionary = ["x": 2]
+        }
+        #expect(await values.next() == 2)
+        await #expect(throws: [String: Int].Store.Error.self) { try await store.get("discarded") }
+        do {
+            try await store.transaction { store in
+                store.batch([("x", 99)])
+                store.dictionary = ["discarded": 99]
+                throw TestFailure.rollback
+            }
+        } catch {}
+        #expect(try await store.get("x") == 2)
+        await store.set("x", to: 3)
+        #expect(await values.next() == 3)
+    }
+
     @Test func routed_subscriptions_and_concurrent_batches_produce_the_same_document() async throws {
         let original = Any?.Store()
         let copy = Any?.Store()

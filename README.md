@@ -53,8 +53,15 @@ let snapshot = try SendableValue(jsonObject: ["name": "Dorothy", "avatar": NSNul
 await document.set("profile", to: snapshot)
 ```
 
-Batch changes notify each affected route once. Transactions use a synchronous
+Path observation replays the current value. Changes notify the root, observed
+ancestors and observed descendants, including when a whole subtree is replaced.
+Each affected route receives one final snapshot per batch. Root replacement
+through `data` follows the same contract.
+
+Both routed and dictionary stores stage `set`, `batch` and root replacements, so a nested rollback
+discards all three kinds of edit. Transactions use a synchronous
 actor-isolated closure, so other tasks cannot interleave as fake nested scopes.
+These are staged write batches: reads retain committed values until the outer commit.
 Do asynchronous work before entering a transaction:
 
 ```swift

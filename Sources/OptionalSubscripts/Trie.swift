@@ -133,9 +133,18 @@ public extension Trie where Key: Comparable {
 // Store notifications include ancestors and all observed descendants of a write.
 extension Trie where Key: Comparable {
     func routes<Route: Collection>(affectedByChanging route: Route) -> [[Key]] where Route.Element == Key {
-        var paths = route.lineage.reversed().map(Array.init)
-        let subtree: Self? = self[route]
-        if let subtree { paths.append(contentsOf: subtree.depthFirstSearch().map { Array(route) + $0.path }) }
+        var paths: [[Key]] = []
+        var prefix: [Key] = []
+        var node = self
+        for key in route {
+            if node.value != nil { paths.append(prefix) }
+            guard let child = node.branches[key] else { return paths }
+            prefix.append(key)
+            node = child
+        }
+        for (suffix, value) in node.depthFirstSearch(sorted: false) where value != nil {
+            paths.append(prefix + suffix)
+        }
         return paths
     }
 }

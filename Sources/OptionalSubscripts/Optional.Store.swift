@@ -9,7 +9,14 @@ public extension Optional where Wrapped == Any {
         public typealias BatchUpdates = [(Route, SendableValue)]
         public typealias TransactionLevel = UInt
         
-        public var data: SendableValue
+        private var storedData: SendableValue
+
+        /// Root replacement follows the same batching and notification contract
+        /// as a path write, including when called inside an isolated transaction.
+        public var data: SendableValue {
+            get { storedData }
+            set { set([] as Route, to: newValue) }
+        }
         
         public private(set) var transactionLevel: TransactionLevel = 0
         public private(set) var transactionUpdates: [TransactionLevel: BatchUpdates] = [:]
@@ -21,7 +28,7 @@ public extension Optional where Wrapped == Any {
         var subscriptions = Trie<Location, Subject>()
         
         public init(_ data: SendableValue = nil) {
-            self.data = data
+            self.storedData = data
         }
     }
 }
@@ -92,14 +99,14 @@ public extension Optional.Store where Wrapped == Any {
     }
     
     func batch(_ updates: BatchUpdates) {
+        guard transactionLevel == 0 else {
+            transactionUpdates[transactionLevel, default: []].append(contentsOf: updates)
+            return
+        }
         var routes: Set<Route> = []
         for (route, value) in updates {
-            data[route] = value
-            routes.formUnion(
-                subscriptions
-                    .routes(affectedByChanging: route)
-                    .filter{ subscriptions[$0]?.value != nil }
-            )
+            storedData[route] = value
+            routes.formUnion(subscriptions.routes(affectedByChanging: route))
         }
         for route in routes.sorted(by: <) {
             guard let subject: Subject = subscriptions[route] else { continue }
@@ -116,30 +123,7 @@ public extension Optional.Store where Wrapped == Any {
     }
     
     func set<Route>(_ route: Route, to value: SendableValue) where Route: Collection, Route.Index == Int, Route.Element == Location {
-        guard transactionLevel == 0 else {
-            return transactionUpdates[transactionLevel, default: []].append((Array(route), value))
-        }
-        data[route] = value
-        didSet(route, to: value)
-    }
-}
-
-extension Optional.Store where Wrapped == Any {
-    
-    func didSet<Route>(_ route: Route, to value: SendableValue) where Route: Collection, Route.Index == Int, Route.Element == Location {
-        for route in route.lineage.reversed() {
-            guard let subject: Subject = subscriptions[route] else {
-                continue
-            }
-            let data = data[route]
-            subject.values.forEach { $0.yield(data) }
-        }
-        let subtree: Trie<Location, Subject>? = subscriptions[route]
-        for (subroute, subject) in subtree?.depthFirstSearch() ?? Trie<Location, Subject>().depthFirstSearch() {
-            guard let subject else { continue }
-            let data = value[subroute]
-            subject.values.forEach { $0.yield(data) }
-        }
+        batch([(Array(route), value)])
     }
 }
 

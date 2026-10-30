@@ -1,9 +1,6 @@
 import Foundation
 @testable import OptionalSubscripts
 import Testing
-#if canImport(Combine)
-import Combine
-#endif
 
 struct OptionalTests {
     @Test func dynamic_subscripts_keep_typed_reads_holes_key_paths_and_pruning() throws {
@@ -101,12 +98,4 @@ struct OptionalTests {
         document[path] = "deep"
         #expect(try document[Any?.keyPath(path)] as String == "deep")
     }
-
-    #if canImport(Combine)
-    @Test func synchronous_combine_cast_and_filter_operators_remain_available() {
-        let values = Just<Any>("hello").filter(String.self)
-        let token = values.sink { #expect($0 == "hello") }
-        token.cancel()
-    }
-    #endif
 }

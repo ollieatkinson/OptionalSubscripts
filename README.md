@@ -190,7 +190,7 @@ branch. Optional nil is distinct from absence. Depth-first search visits parents
 before descendants, with sorted or insertion-order siblings. Sendable conformance
 is conditional on keys and values.
 
-### Observing async sequences and Combine
+### Observing async sequences
 
 For general concurrent code, native async operators and a task-owned `sink` accept
 Sendable async handlers. Keep the returned observation alive; cancelling or
@@ -204,16 +204,8 @@ observation.cancel()
 await observation.wait()
 ```
 
-Real Combine interop remains available through `.publisher()`, using Swift 6.4
-MainActor-isolated `Publisher`/`Subscription` conformances. Build and use those
-publishers on MainActor; subscriber delivery, demand and cancellation stay there.
-Sequence failure types are preserved. Standard Combine operators, `sink` and
-`eraseToAnyPublisher()` work in that actor context. Arbitrary non-Sendable
-subscribers are never transferred into background tasks. Stores and source
-factories remain concurrent; only this UI-facing adapter is MainActor-bound.
-
-The base deployment floors are macOS 12 / iOS 15. ValuePond, routed Pond and the
-isolated Combine adapter require macOS 15 / iOS 18 equivalents. See the
+The base deployment floors are macOS 12 / iOS 15. ValuePond and routed Pond
+require macOS 15 / iOS 18 equivalents. See the
 [Swift 6 migration guide](Documentation/Swift6Migration.md) for API changes and
 behaviour-test mapping. CI uses `xcode-27` and checks the whole module and all tests
 with complete concurrency checking and warnings as errors.

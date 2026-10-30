@@ -51,14 +51,12 @@ remapping instead of making them all read one globally mutable forwarding bus.
 Pond-owned revision trackers reject delayed cache writes after remap/cancel and
 are released with their owner; injected Stores retain no per-Pond route tables.
 
-## Combine
+## Async observation
 
-`.publisher()` still returns a real Combine Publisher. Its conformance and
-subscription are MainActor-isolated, so create/use/erase it on that actor and
-keep erased publishers in the same actor context. The source Failure type is
-preserved. This restriction replaces the old transfer of an arbitrary
-non-Sendable Subscriber into an actor task. General background consumers can use
-`for try await` or task-owned async `sink` with Sendable handlers.
+Observe with `for try await`, or compose native async operators before calling
+`sink`. Its value and completion handlers are Sendable async closures. Keep the
+returned AsyncObservation alive for the subscription's lifetime; cancelling or
+releasing it cancels its task. `wait()` joins observation completion.
 
 ## Scenario coverage
 
@@ -73,7 +71,7 @@ empty XCTest method are not recreated as runtime parity assertions.
 | ValueStore initialization, updates, inout notifications and identity | StoreTests, following the updated gist tests |
 | Dictionary streaming, batching, nested levels and rollback | StoreTests; concurrent transaction entry is also checked |
 | Routed Store fine/upstream/downstream updates, batches and concurrent writers | StoreTests, including mixed ancestor/child writes and many concurrent observations |
-| Publisher observation flows and batch results | StoreTests task-owned sink; CombineTests standard operators/erasure, explicit demand and cancellation |
+| Observation callbacks and batch results | StoreTests native sink; AsyncObservationTests owner release, cancellation and source failures |
 | Pond version changes, nested fields and reference counts | RoutedPondTests, including partial remaps and return to reused IDs |
 | Real writable database updates shared by fine observers | RoutedPondTests Store-backed Geyser; cache-only writes are explicitly excluded |
 | ValuePond replay, pending consumers, expiry, buffering, restart and cancellation | ValuePondTests; compatibility mapping is in ValuePond.md |
@@ -81,8 +79,8 @@ empty XCTest method are not recreated as runtime parity assertions.
 
 Additional deterministic gate tests cover pending-factory cancellation, stale
 producer generations, delayed cache writes across remaps, empty/error mappings,
-source failures and per-consumer buffering. Combine cancellation is checked with
-zero demand and retained publisher/sequence values.
+source failures and per-consumer buffering. Async observation cancellation is
+checked while the underlying sequence remains retained.
 
 Validation commands:
 

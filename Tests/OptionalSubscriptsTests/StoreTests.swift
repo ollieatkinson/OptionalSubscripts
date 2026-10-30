@@ -142,7 +142,7 @@ import Testing
         await pending.wait()
     }
 
-    @Test func routed_sink_replaces_the_old_publisher_callback_flow() async throws {
+    @Test func routed_sink_observes_live_field_updates() async throws {
         let store = Any?.Store()
         let received = ValueStore([String]())
         let observation = await store.stream("heart", bufferingPolicy: .unbounded).filter(String.self).prefix(3).sink { value in

@@ -325,7 +325,7 @@ import Testing
     }
 
     @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
-    @Test func cache_revisions_reject_late_writes_without_suppressing_other_mounts() async throws {
+    @Test func cache_revisions_reject_late_writes_without_suppressing_other_routes() async throws {
         let store = Any?.Store()
         let revisions = CacheRevisions()
         await store.cache([(["a"], "new")], revisions: revisions, revision: 2)

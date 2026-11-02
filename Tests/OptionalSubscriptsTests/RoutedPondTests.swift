@@ -4,7 +4,7 @@ import Testing
 
 @Suite(.timeLimit(.minutes(1))) struct RoutedPondTests {
     @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
-    @Test func replay_populates_a_new_cache_mount_after_the_source_finishes() async throws {
+    @Test func replay_populates_a_new_cache_route_after_the_source_finishes() async throws {
         let source = RoutedSource()
         let pond = Any?.Pond(source: source)
         defer { await pond.cancel() }
@@ -27,7 +27,7 @@ import Testing
     }
 
     @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
-    @Test func same_id_projection_changes_populate_the_new_cache_mount() async throws {
+    @Test func same_id_projection_changes_populate_the_new_cache_route() async throws {
         let source = RoutedSource()
         let pond = Any?.Pond(source: source)
         defer { await pond.cancel() }
@@ -162,7 +162,7 @@ import Testing
         var missing = pond.stream(absent).makeAsyncIterator()
         try await routedWait { await source.mappingCount == 1 }
         await source.map(absent, to: nil, at: [])
-        await #expect(throws: Any?.Pond<RoutedSource>.RoutingError.unmounted(absent)) { try await missing.next() }
+        await #expect(throws: Any?.Pond<RoutedSource>.RoutingError.noSource(absent)) { try await missing.next() }
         try await routedWait { await source.endedMappings == 1 }
         let route: Any?.Route = ["items", 1, "leaf"]
         var invalid = pond.stream(route).makeAsyncIterator()
@@ -324,14 +324,14 @@ import Testing
     }
 
     @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
-    @Test func a_lake_mounts_routed_ponds_preserving_full_routes_and_document_sharing() async throws {
+    @Test func a_lake_connects_routed_ponds_preserving_full_routes_and_document_sharing() async throws {
         let localSource = RoutedSource()
         let remoteSource = RoutedSource()
         let local = Any?.Pond(source: localSource)
         let remote = Any?.Pond(source: remoteSource)
         defer { await local.cancel(); await remote.cancel() }
         typealias Documents = Lake<Any?.Route, Any?.Pond<RoutedSource>.Stream>
-        let lake = try Documents(mounts: [
+        let lake = try Documents(inlets: [
             .init(at: ["local"], source: { local.stream($0) }),
             .init(at: ["remote"], source: { remote.stream($0) }),
         ])
@@ -383,16 +383,16 @@ import Testing
         try await routedWait { await source.starts["new"] == 1 }
         await source.map(a, to: "old", at: ["doc"])
         try await routedWait { await pond.gushSources["old"]?.referenceCount == 2 }
-        // Remounting replays the document into the cache under the new revision.
+        // Reconnecting replays the document into the cache under the new revision.
         try await routedWait { (try? await store.get("doc", "a", as: String.self)) == "stale" }
-        await store.set("doc", "a", to: "remounted")
-        // The older pending batch must not overwrite this newer mount.
+        await store.set("doc", "a", to: "reconnected")
+        // The older pending batch must not overwrite this newer cache projection.
         await pond.setCacheWriteBarrier { await nextGate.wait() }
         await source.send("old", value: ["a": "next", "b": "next"])
         await gate.release()
         var next = nextGate.entered.makeAsyncIterator()
         _ = await next.next()
-        #expect(try await store.get("doc", "a", as: String.self) == "remounted")
+        #expect(try await store.get("doc", "a", as: String.self) == "reconnected")
         #expect(await source.starts["old"] == 1)
         await pond.setCacheWriteBarrier(nil)
         await nextGate.release()

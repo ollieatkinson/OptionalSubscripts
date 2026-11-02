@@ -15,12 +15,12 @@ struct LakeTests {
 
     @Test(arguments: [false, true])
     func deepest_prefix_wins_independent_of_registration_order(reversed: Bool) async throws {
-        let mounts: [Routed.Mount<String>] = [
+        let inlets: [Routed.Inlet<String>] = [
             .init(at: [], source: { _ in Self.values("default") }),
             .init(at: ["api"], source: { _ in Self.values("api") }),
             .init(at: ["api", "programme"], source: { request in Self.values(request.joined(separator: "/")) }),
         ]
-        let lake = try Routed(mounts: reversed ? mounts.reversed() : mounts)
+        let lake = try Routed(inlets: reversed ? inlets.reversed() : inlets)
         let programme = try await lake.stream(["api", "programme", "p123"]).reduce(into: []) { $0.append($1) }
         let other = try await lake.stream(["apiary"]).reduce(into: []) { $0.append($1) }
         #expect(programme == ["api/programme/p123"])
@@ -29,7 +29,7 @@ struct LakeTests {
 
     @Test func deep_routes_keep_the_deepest_prefix_and_original_request() async throws {
         let path = (0..<256).map { "segment-\($0)" }
-        let lake = try Routed(mounts: [
+        let lake = try Routed(inlets: [
             .init(at: Array(path.prefix(128)), source: { _ in Self.values("ancestor") }),
             .init(at: path, source: { Self.values($0.joined(separator: "/")) }),
             .init(at: [], source: { _ in Self.values("default") }),
@@ -42,11 +42,11 @@ struct LakeTests {
     }
 
     @Test func wide_sibling_routes_match_complete_components() async throws {
-        let siblings: [Routed.Mount<String>] = (0..<1_024).map { index in
+        let siblings: [Routed.Inlet<String>] = (0..<1_024).map { index in
             let name = "branch-\(index)"
             return .init(at: ["api", name], source: { request in Self.values(name, request.last) })
         }
-        let lake = try Routed(mounts: siblings.reversed() + [
+        let lake = try Routed(inlets: siblings.reversed() + [
             .init(at: [], source: { _ in Self.values("default") }),
         ])
         for index in [0, 512, 1_023] {
@@ -58,7 +58,7 @@ struct LakeTests {
 
     @Test func optional_subscript_routes_keep_keys_and_indices_distinct() async throws {
         typealias Native = Lake<Any?.Route, AsyncStream<String?>>
-        let lake = try Native(mounts: [
+        let lake = try Native(inlets: [
             .init(at: ["items", 1], source: { _ in Self.values("index") }),
             .init(at: ["items", "1"], source: { _ in Self.values("key") }),
         ])
@@ -66,21 +66,21 @@ struct LakeTests {
         #expect(try await lake.stream(["items", "1"]).reduce(into: []) { $0.append($1) } == ["key"])
     }
 
-    @Test func duplicate_and_unmounted_routes_fail_before_opening_sources() async throws {
+    @Test func duplicate_and_unrouted_requests_fail_before_opening_sources() async throws {
         let counter = Counter()
-        let mount = Routed.Mount(at: ["api"]) { _ in
+        let inlet = Routed.Inlet(at: ["api"]) { _ in
             await counter.increment()
             return Self.values("unexpected")
         }
-        #expect(throws: Routed.RoutingError<String>.duplicateMount(["api"])) {
-            try Routed(mounts: [mount, mount])
+        #expect(throws: Routed.RoutingError<String>.duplicateInlet(["api"])) {
+            try Routed(inlets: [inlet, inlet])
         }
-        let root = Routed.Mount<String>(at: [], source: { _ in Self.values("default") })
-        #expect(throws: Routed.RoutingError<String>.duplicateMount([])) {
-            try Routed(mounts: [root, root])
+        let root = Routed.Inlet<String>(at: [], source: { _ in Self.values("default") })
+        #expect(throws: Routed.RoutingError<String>.duplicateInlet([])) {
+            try Routed(inlets: [root, root])
         }
-        let lake = try Routed(mounts: [mount])
-        await #expect(throws: Routed.RoutingError<String>.unmounted(["other"])) {
+        let lake = try Routed(inlets: [inlet])
+        await #expect(throws: Routed.RoutingError<String>.noSource(["other"])) {
             try await lake.stream(["other"])
         }
         #expect(await counter.value == 0)
@@ -88,7 +88,7 @@ struct LakeTests {
 
     @Test func selected_absence_and_empty_completion_do_not_fall_back() async throws {
         let counter = Counter()
-        let lake = try Routed(mounts: [
+        let lake = try Routed(inlets: [
             .init(at: [], source: { _ in
                 await counter.increment()
                 return Self.values("fallback")
@@ -108,7 +108,7 @@ struct LakeTests {
         enum Failure: Error { case opening, iteration }
         typealias Throwing = Lake<Route, AsyncThrowingStream<Int, Error>>
         let counter = Counter()
-        let lake = try Throwing(mounts: [
+        let lake = try Throwing(inlets: [
             .init(at: [], source: { _ in
                 await counter.increment()
                 return AsyncThrowingStream { $0.finish() }
@@ -139,7 +139,7 @@ struct LakeTests {
         let inner = Contextual { request in
             await store.stream(request.entity)
         }
-        let outer = try Contextual(mounts: [
+        let outer = try Contextual(inlets: [
             .init(at: ["api"], source: { try await inner.stream($0) }),
         ], route: { $0.route })
         var iterator = try await outer.stream(Request(route: ["api", "programme"], entity: "p123")).makeAsyncIterator()
@@ -278,7 +278,7 @@ struct LakeTests {
             return upstream
         })
         defer { await pond.cancel() }
-        let lake = try Lake<Route, AsyncStream<Int>>(mounts: [
+        let lake = try Lake<Route, AsyncStream<Int>>(inlets: [
             .init(at: ["data"], source: { _ in await pond.stream() }),
         ])
         var first = try await lake.stream(["data", "first"]).makeAsyncIterator()

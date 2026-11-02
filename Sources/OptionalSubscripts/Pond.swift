@@ -20,7 +20,7 @@ public extension Optional where Wrapped == Any {
         private var generation: UInt64 = 0
         private var revision: UInt64 = 0
         private var cacheRevisions = CacheRevisions()
-        private var cacheMounts: [Route: Source.GushID] = [:]
+        private var cacheRoutes: [Route: Source.GushID] = [:]
         private var subscriptions: [UUID: Subscription] = [:]
         private var cacheWriteBarrier: (@Sendable () async -> Void)?
         private var entries: [Source.GushID: Entry] = [:]
@@ -46,9 +46,9 @@ public extension Optional where Wrapped == Any {
         public var gushSources: [Source.GushID: GushSource] {
             entries.mapValues { GushSource(referenceCount: UInt($0.observers.count)) }
         }
-        public var sourceIDs: [Route: Source.GushID] { cacheMounts }
+        public var sourceIDs: [Route: Source.GushID] { cacheRoutes }
         public enum RoutingError: Error, Equatable {
-            case unmounted(Route)
+            case noSource(Route)
             case invalidMapping(Route)
         }
 
@@ -125,7 +125,7 @@ public extension Optional where Wrapped == Any {
             subscriptions.removeAll()
             for entry in entries.values { entry.task?.cancel(); entry.grace?.cancel() }
             entries.removeAll()
-            cacheMounts.removeAll()
+            cacheRoutes.removeAll()
             for output in outputs { output.finish() }
         }
 
@@ -140,7 +140,7 @@ public extension Optional where Wrapped == Any {
 
         private func remap(_ id: UUID, to mapping: (id: Source.GushID, route: Route)?) async throws {
             guard var subscription = subscriptions[id] else { return }
-            guard let mapping else { throw RoutingError.unmounted(subscription.route) }
+            guard let mapping else { throw RoutingError.noSource(subscription.route) }
             guard subscription.route.starts(with: mapping.route) else { throw RoutingError.invalidMapping(mapping.route) }
             let previous = subscription.mapping
             if let previous, previous.id == mapping.id, previous.route == mapping.route { return }
@@ -150,8 +150,8 @@ public extension Optional where Wrapped == Any {
             subscription.mapping = mapping
             subscription.mappingOrder = revision
             subscriptions[id] = subscription
-            if let previous, previous.route != mapping.route { refreshCacheMount(previous.route) }
-            cacheMounts[mapping.route] = mapping.id
+            if let previous, previous.route != mapping.route { refreshCacheRoute(previous.route) }
+            cacheRoutes[mapping.route] = mapping.id
             // Changing a projection on the same document must not restart its
             // upstream, even when this is its only observer and grace is zero.
             if let previous, previous.id == mapping.id {
@@ -211,11 +211,11 @@ public extension Optional where Wrapped == Any {
         private func publish(_ value: SendableValue, from id: Source.GushID, generation: UInt64) async {
             guard entries[id]?.generation == generation else { return }
             entries[id]?.replay = .value(value)
-            var mounts: Set<Route> = []
+            var routes: Set<Route> = []
             for observer in entries[id]?.observers ?? [] {
                 guard let subscription = subscriptions[observer], let mapping = subscription.mapping else { continue }
                 subscription.output.yield(value[subscription.route.dropFirst(mapping.route.count)])
-                if cacheMounts[mapping.route] == id { mounts.insert(mapping.route) }
+                if cacheRoutes[mapping.route] == id { routes.insert(mapping.route) }
             }
             // Keep the inspectable document cache, without using a second
             // forwarding stream or buffer for each fine-route observer.
@@ -224,8 +224,8 @@ public extension Optional where Wrapped == Any {
             let revisions = cacheRevisions
             if let cacheWriteBarrier { await cacheWriteBarrier() }
             guard !Task.isCancelled, entries[id]?.generation == generation else { return }
-            let currentMounts = mounts.filter { cacheMounts[$0] == id }
-            await store.cache(currentMounts.map { ($0, value) }, revisions: revisions, revision: publication)
+            let currentRoutes = routes.filter { cacheRoutes[$0] == id }
+            await store.cache(currentRoutes.map { ($0, value) }, revisions: revisions, revision: publication)
         }
 
         private func completed(_ id: Source.GushID, generation: UInt64) {
@@ -249,10 +249,10 @@ public extension Optional where Wrapped == Any {
         private func remove(_ id: UUID) {
             guard let subscription = subscriptions.removeValue(forKey: id), let mapping = subscription.mapping else { return }
             release(id, from: mapping.id)
-            refreshCacheMount(mapping.route)
+            refreshCacheRoute(mapping.route)
         }
-        private func refreshCacheMount(_ route: Route) {
-            cacheMounts[route] = subscriptions.values.filter { $0.mapping?.route == route }
+        private func refreshCacheRoute(_ route: Route) {
+            cacheRoutes[route] = subscriptions.values.filter { $0.mapping?.route == route }
                 .max(by: { $0.mappingOrder < $1.mappingOrder })?.mapping?.id
         }
         private func release(_ observer: UUID, from id: Source.GushID) {

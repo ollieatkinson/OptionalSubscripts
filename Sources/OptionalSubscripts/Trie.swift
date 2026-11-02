@@ -88,7 +88,7 @@ public extension Trie {
 }
 
 extension Trie {
-    /// Lake rejects duplicate mounts rather than replacing an existing value.
+    /// Lake rejects duplicate inlets rather than replacing an existing value.
     mutating func insert(_ path: some Collection<Key>, value: Value) -> Bool {
         guard let key = path.first else {
             guard case .none = self.value else { return false }

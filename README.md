@@ -84,7 +84,7 @@ updates; `pond.store` is an inspectable cache, and edits there do not emit value
 let local = Any?.Pond(source: Documents())
 let remote = Any?.Pond(source: Documents())
 typealias Routed = Any?.Pond<Documents>
-let lake = try Lake<Any?.Route, Routed.Stream>(mounts: [
+let lake = try Lake<Any?.Route, Routed.Stream>(inlets: [
     .init(at: ["local"], source: { local.stream($0) }),
     .init(at: ["remote"], source: { remote.stream($0) }),
 ])
@@ -92,8 +92,9 @@ let lake = try Lake<Any?.Route, Routed.Stream>(mounts: [
 
 Here, `Documents` is your Geyser implementation. Open a route with
 `try await lake.stream(["local", "user", "name"])`. Sources receive the full path,
-including the mount prefix. An empty mount is a default; duplicate or unmounted
-routes throw. A selected source's completion or failure does not try another mount.
+including the inlet prefix. An empty inlet is a default; duplicate inlets or
+unrouted requests throw. A selected source's completion or failure does not try
+another inlet.
 
 `Trie` stores values by path and supports deepest-prefix lookup:
 

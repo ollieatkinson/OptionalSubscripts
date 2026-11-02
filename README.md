@@ -68,6 +68,8 @@ for await value in await pond.stream() { print(value) }
 
 The source stays alive while observed and for the grace period afterwards.
 Expiry clears the cached value; the next subscriber starts a fresh source.
+`invalidate()` refreshes active subscribers together without closing them; an
+unobserved pond stays lazy. `cancel()` closes subscribers and clears replay.
 
 `Any?.Pond` uses a [Geyser](Sources/OptionalSubscripts/Geyser.swift) to map paths to
 shared document sources. Iterate its streams with `for try await` to handle

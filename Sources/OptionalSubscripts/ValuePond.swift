@@ -95,6 +95,14 @@ where Source.Element: Sendable, Source.Failure == Never {
         for continuation in continuations { continuation.finish() }
     }
 
+    /// Discards replay and cancels the current source without closing observers.
+    /// Active observers share one fresh source. With no observers, acquisition
+    /// stays lazy until the next stream/get. Cancelled generations cannot publish.
+    public func invalidate() {
+        reset()
+        if !observers.isEmpty { start() }
+    }
+
     private func start() {
         generation &+= 1
         let generation = generation

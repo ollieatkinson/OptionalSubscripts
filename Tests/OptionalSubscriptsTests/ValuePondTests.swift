@@ -5,6 +5,63 @@ import Testing
 
 @Suite(.timeLimit(.minutes(1))) struct ValuePondTests {
     @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
+    @Test func invalidation_keeps_active_consumers_and_replaces_completed_replay_once() async throws {
+        let counter = PondCounter()
+        let pond = ValuePond(get: { await counter.next() })
+        defer { await pond.cancel() }
+        var first = await pond.stream().makeAsyncIterator()
+        var second = await pond.stream().makeAsyncIterator()
+        #expect(await first.next() == 1)
+        #expect(await second.next() == 1)
+        await pond.invalidate()
+        #expect(await first.next() == 2)
+        #expect(await second.next() == 2)
+        #expect(try await pond.get() == 2)
+        #expect(await counter.count == 2)
+        #expect(await pond.referenceCount >= 2)
+    }
+
+    @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
+    @Test func invalidation_with_no_consumers_discards_replay_without_eagerly_fetching() async throws {
+        let counter = PondCounter()
+        let clock = TestClock()
+        let pond = ValuePond(clock: clock, get: { await counter.next() })
+        defer { await pond.cancel() }
+        #expect(try await pond.get() == 1)
+        try await waitUntil { await pond.referenceCount == 0 }
+        await pond.invalidate()
+        await clock.advance(by: .seconds(120))
+        #expect(await counter.count == 1)
+        #expect(try await pond.get() == 2)
+    }
+
+    @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
+    @Test func invalidation_supersedes_a_pending_factory_without_finishing_its_consumers() async {
+        let source = PondSource()
+        let gate = PondGate()
+        let pond = ValuePond(source: {
+            let (id, stream) = await source.openWithID()
+            if id == 1 { await gate.wait() }
+            return stream
+        })
+        defer { await gate.release(); await pond.cancel() }
+        var events = source.events.makeAsyncIterator()
+        var entered = gate.entered.makeAsyncIterator()
+        var values = await pond.stream().makeAsyncIterator()
+        #expect(await entered.next() != nil)
+        #expect(await events.next() == .opened(1))
+        await pond.invalidate()
+        #expect(await events.next() == .opened(2))
+        await source.send(2, to: 2)
+        #expect(await values.next() == 2)
+        await source.send(100, to: 1)
+        await gate.release()
+        #expect(await events.next() == .closed(1))
+        await source.send(3, to: 2)
+        #expect(await values.next() == 3)
+    }
+
+    @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
     @Test func mapped_sequences_preserve_values_and_share_the_underlying_source() async {
         let source = PondSource()
         let pond = ValuePond(source: { await source.open().map { $0 * 2 } })
@@ -411,6 +468,7 @@ private final class PondTerminations: Sendable {
 @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
 private actor PondCounter {
     private var value = 0
+    var count: Int { value }
     func next() -> Int { value += 1; return value }
 }
 

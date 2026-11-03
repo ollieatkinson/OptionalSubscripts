@@ -51,11 +51,19 @@ where Source.Element: Sendable, Source.Failure == Never {
         for continuation in observers.values { continuation.finish() }
     }
 
-    public func stream(bufferingPolicy: BufferingPolicy = .unbounded) -> AsyncStream<Value> {
+    /// The termination hook belongs to this consumer, not the shared source.
+    /// It runs after that subscription is removed, even if the pond was released.
+    public func stream(
+        bufferingPolicy: BufferingPolicy = .unbounded,
+        onTermination: @escaping @Sendable (AsyncStream<Value>.Continuation.Termination) -> Void = { _ in }
+    ) -> AsyncStream<Value> {
         let (stream, continuation) = AsyncStream.makeStream(of: Value.self, bufferingPolicy: bufferingPolicy)
         let id = UUID()
-        continuation.onTermination = { @Sendable [weak self] _ in
-            Task { @concurrent in await self?.remove(id) }
+        continuation.onTermination = { @Sendable [weak self] termination in
+            Task { @concurrent in
+                await self?.remove(id)
+                onTermination(termination)
+            }
         }
         graceTask?.cancel()
         graceTask = nil

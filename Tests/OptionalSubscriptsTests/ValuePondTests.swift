@@ -5,6 +5,65 @@ import Testing
 
 @Suite(.timeLimit(.minutes(1))) struct ValuePondTests {
     @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
+    @Test func a_consumer_hook_survives_source_completion_and_invalidation_until_its_subscription_ends() async throws {
+        let counter = PondCounter()
+        let ended = AsyncStream<Bool>.makeStream()
+        let pond = ValuePond(get: { await counter.next() })
+        var values = await pond.stream(onTermination: { termination in
+            if case .finished = termination { ended.continuation.yield(true) }
+            else { ended.continuation.yield(false) }
+        }).makeAsyncIterator()
+        #expect(await values.next() == 1)
+        await pond.invalidate()
+        #expect(await values.next() == 2)
+        await pond.cancel()
+        #expect(await values.next() == nil)
+        var notifications = ended.stream.makeAsyncIterator()
+        #expect(await notifications.next() == true)
+        #expect(await pond.referenceCount == 0)
+    }
+
+    @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
+    @Test func cancelling_one_consumer_runs_only_its_hook_after_removal_and_preserves_the_other() async {
+        let source = PondSource()
+        let ended = AsyncStream<Int>.makeStream()
+        let pond = ValuePond(cancellingGracePeriod: .zero, source: { await source.open() })
+        let first = await pond.stream(onTermination: { termination in
+            if case .cancelled = termination { ended.continuation.yield(1) }
+        })
+        var second = await pond.stream(onTermination: { termination in
+            if case .finished = termination { ended.continuation.yield(2) }
+        }).makeAsyncIterator()
+        let consumer = Task { @concurrent in for await _ in first {} }
+        var events = source.events.makeAsyncIterator()
+        #expect(await events.next() == .opened(1))
+        consumer.cancel()
+        await consumer.value
+        var notifications = ended.stream.makeAsyncIterator()
+        #expect(await notifications.next() == 1)
+        #expect(await pond.referenceCount == 1)
+        await source.send(42, to: 1)
+        #expect(await second.next() == 42)
+        await pond.cancel()
+        #expect(await notifications.next() == 2)
+        #expect(await second.next() == nil)
+    }
+
+    @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
+    @Test func the_consumer_hook_runs_when_the_owner_is_released_without_retaining_it() async {
+        let source = PondSource()
+        let ended = AsyncStream<Void>.makeStream()
+        var pond: ValuePond<AsyncStream<Int>>? = ValuePond(source: { await source.open() })
+        var values = await pond!.stream(onTermination: { _ in ended.continuation.yield(()) }).makeAsyncIterator()
+        weak let released = pond
+        pond = nil
+        #expect(released == nil)
+        #expect(await values.next() == nil)
+        var notifications = ended.stream.makeAsyncIterator()
+        #expect(await notifications.next() != nil)
+    }
+
+    @available(macOS 15, iOS 18, tvOS 18, watchOS 11, *)
     @Test func invalidation_keeps_active_consumers_and_replaces_completed_replay_once() async throws {
         let counter = PondCounter()
         let pond = ValuePond(get: { await counter.next() })
